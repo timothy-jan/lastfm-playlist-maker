@@ -115,6 +115,10 @@
       not_found: notFound,
     });
 
+    if (finish.result) {
+      sessionStorage.setItem("playlistResult", JSON.stringify(finish.result));
+    }
+
     window.location.href = finish.redirect;
   }
 

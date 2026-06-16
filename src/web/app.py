@@ -225,37 +225,42 @@ def create_app() -> Flask:
                 {"success": False, "error": "Could not match any tracks on Spotify."}
             ), 400
 
-        session[LAST_RESULT_KEY] = {
-            "url": job["playlist_url"],
-            "playlist_name": job["playlist_name"],
-            "matched": matched,
-            "total": total,
-            "not_found": payload.get("not_found", []),
-        }
         session.pop(CHUNK_JOB_KEY, None)
-        return jsonify({"success": True, "redirect": url_for("show_result")})
+        return jsonify(
+            {
+                "success": True,
+                "redirect": url_for("show_result", source="client"),
+                "result": {
+                    "url": job["playlist_url"],
+                    "playlist_name": job["playlist_name"],
+                    "matched": matched,
+                    "total": total,
+                    "not_found": payload.get("not_found", []),
+                },
+            }
+        )
 
     @app.get("/result")
     def show_result():
+        if request.args.get("source") == "client":
+            spotify = spotify_destination()
+            return render_template(
+                "result.html",
+                result=None,
+                client_result=True,
+                spotify_connected=spotify.is_authenticated(),
+            )
+
         data = session.pop(LAST_RESULT_KEY, None)
-        if not data:
+        if not data or not isinstance(data, dict):
             return redirect(url_for("index"))
 
-        from types import SimpleNamespace
-
-        result = SimpleNamespace(
-            url=data["url"],
-            playlist_name=data["playlist_name"],
-            create_result=SimpleNamespace(
-                matched=data["matched"],
-                total=data["total"],
-                not_found=[Track(**t) for t in data["not_found"]],
-            ),
-        )
+        result = _result_namespace(data)
         spotify = spotify_destination()
         return render_template(
             "result.html",
             result=result,
+            client_result=False,
             spotify_connected=spotify.is_authenticated(),
         )
 
@@ -469,6 +474,20 @@ def _error_response(message: str):
     return redirect(url_for("index"))
 
 
+def _result_namespace(data: dict):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        url=data["url"],
+        playlist_name=data["playlist_name"],
+        create_result=SimpleNamespace(
+            matched=data["matched"],
+            total=data["total"],
+            not_found=[Track(**t) for t in data.get("not_found", [])],
+        ),
+    )
+
+
 def _serialize_result(result: BuildResult) -> dict:
     create_result = result.create_result
     return {
@@ -492,6 +511,7 @@ def _success_response(result: BuildResult, spotify_connected: bool):
     return render_template(
         "result.html",
         result=result,
+        client_result=False,
         spotify_connected=spotify_connected,
     )
 
