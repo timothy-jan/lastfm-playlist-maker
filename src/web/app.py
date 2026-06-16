@@ -219,11 +219,7 @@ def create_app() -> Flask:
 
         matched = int(payload.get("matched", 0))
         total = int(payload.get("total", job.get("total", 0)))
-        if matched == 0:
-            session.pop(CHUNK_JOB_KEY, None)
-            return jsonify(
-                {"success": False, "error": "Could not match any tracks on Spotify."}
-            ), 400
+        not_found = payload.get("not_found", [])
 
         session.pop(CHUNK_JOB_KEY, None)
         return jsonify(
@@ -235,7 +231,7 @@ def create_app() -> Flask:
                     "playlist_name": job["playlist_name"],
                     "matched": matched,
                     "total": total,
-                    "not_found": payload.get("not_found", []),
+                    "not_found": not_found,
                 },
             }
         )

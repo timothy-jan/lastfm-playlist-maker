@@ -326,11 +326,6 @@ class SpotifyDestination(PlaylistDestination):
 
     def create_playlist(self, name: str, description: str, tracks: list[Track]) -> PlaylistCreateResult:
         uris, not_found = self._resolve_all_tracks(tracks)
-        if not uris:
-            raise RuntimeError(
-                "Could not match any tracks on Spotify. "
-                "Try a smaller list or check that Last.fm track pages include Spotify links."
-            )
 
         playlist = self.client.current_user_playlist_create(
             name, public=True, description=description
@@ -338,7 +333,8 @@ class SpotifyDestination(PlaylistDestination):
         playlist_id = playlist["id"]
         playlist_url = playlist["external_urls"]["spotify"]
 
-        self.append_tracks(playlist_id, uris)
+        if uris:
+            self.append_tracks(playlist_id, uris)
 
         return PlaylistCreateResult(
             url=playlist_url,

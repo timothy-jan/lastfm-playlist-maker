@@ -10,34 +10,54 @@
   }
 
   function renderResult(data) {
+    const heading = document.getElementById("result-heading");
+    const note = document.getElementById("result-note");
     const subtitle = document.getElementById("result-subtitle");
-    const matched = document.getElementById("result-matched");
-    const total = document.getElementById("result-total");
-    const notMatched = document.getElementById("result-not-matched");
+    const matchedEl = document.getElementById("result-matched");
+    const totalEl = document.getElementById("result-total");
+    const notMatchedEl = document.getElementById("result-not-matched");
     const openLink = document.getElementById("result-open-link");
     const notFound = document.getElementById("result-not-found");
 
-    if (subtitle) subtitle.textContent = data.playlist_name || "";
-    if (matched) matched.textContent = Number(data.matched || 0).toLocaleString();
-    if (total) total.textContent = Number(data.total || 0).toLocaleString();
-
+    const matched = Number(data.matched || 0);
+    const total = Number(data.total || 0);
     const notFoundTracks = Array.isArray(data.not_found) ? data.not_found : [];
-    if (notMatched) notMatched.textContent = notFoundTracks.length.toLocaleString();
-    if (openLink && data.url) openLink.href = data.url;
+    const unmatchedCount =
+      notFoundTracks.length > 0 ? notFoundTracks.length : Math.max(0, total - matched);
+
+    if (subtitle) subtitle.textContent = data.playlist_name || "";
+    if (matchedEl) matchedEl.textContent = matched.toLocaleString();
+    if (totalEl) totalEl.textContent = total.toLocaleString();
+    if (notMatchedEl) notMatchedEl.textContent = unmatchedCount.toLocaleString();
+
+    if (heading) {
+      heading.textContent = matched > 0 ? "Playlist created" : "No tracks matched";
+    }
+    if (note) {
+      note.hidden = matched > 0;
+    }
+    if (openLink) {
+      if (matched > 0 && data.url) {
+        openLink.href = data.url;
+        openLink.hidden = false;
+      } else {
+        openLink.hidden = true;
+      }
+    }
 
     if (!notFound) return;
 
-    if (!notFoundTracks.length) {
+    if (!unmatchedCount) {
       notFound.hidden = true;
       return;
     }
 
-    const summary = notFound.querySelector("summary");
+    const summary = document.getElementById("result-not-found-summary");
     const list = notFound.querySelector(".track-list");
     if (summary) {
-      summary.textContent = `${notFoundTracks.length.toLocaleString()} track(s) couldn't be matched`;
+      summary.textContent = `${unmatchedCount.toLocaleString()} track(s) couldn't be matched`;
     }
-    if (list) {
+    if (list && notFoundTracks.length) {
       list.innerHTML = notFoundTracks
         .map(
           (track) =>
@@ -47,6 +67,9 @@
         .join("");
     }
     notFound.hidden = false;
+    if (matched === 0) {
+      notFound.open = true;
+    }
   }
 
   document.addEventListener("DOMContentLoaded", () => {

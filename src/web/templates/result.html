@@ -4,10 +4,15 @@
 
 {% block content %}
 <section class="card result" id="result-page" data-client-result="{{ 'true' if client_result else 'false' }}">
-  <div class="result-icon">✓</div>
-  <h2>Playlist created</h2>
+  <div class="result-icon" id="result-icon">✓</div>
+  <h2 id="result-heading">
+    {% if result and result.create_result.matched == 0 %}No tracks matched{% else %}Playlist created{% endif %}
+  </h2>
   <p class="result-subtitle" id="result-subtitle">
     {% if result %}{{ result.playlist_name }}{% endif %}
+  </p>
+  <p class="result-note" id="result-note" {% if result and result.create_result.matched > 0 %}hidden{% elif not client_result %}hidden{% endif %}>
+    None of your Last.fm tracks could be matched on Spotify. See the list below.
   </p>
 
   <div class="stats">
@@ -37,12 +42,18 @@
     href="{% if result %}{{ result.url }}{% else %}#{% endif %}"
     target="_blank"
     rel="noopener"
+    {% if result and result.create_result.matched == 0 %}hidden{% elif client_result %}hidden{% endif %}
   >
     Open in Spotify
   </a>
 
-  <details class="not-found" id="result-not-found" {% if client_result or not result or not result.create_result.not_found %}hidden{% endif %}>
-    <summary>
+  <details
+    class="not-found"
+    id="result-not-found"
+    {% if result and result.create_result.not_found and result.create_result.matched == 0 %}open{% endif %}
+    {% if client_result or not result or not result.create_result.not_found %}hidden{% endif %}
+  >
+    <summary id="result-not-found-summary">
       {% if result and result.create_result.not_found %}
         {{ result.create_result.not_found|length }} track(s) couldn't be matched
       {% endif %}
