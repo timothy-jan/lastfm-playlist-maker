@@ -10,7 +10,7 @@ from .config import cache_dir
 
 CACHE_DIR = cache_dir()
 CACHE_DB = CACHE_DIR / "spotify_tracks.db"
-MATCHER_CACHE_VERSION = 3
+MATCHER_CACHE_VERSION = 4
 
 
 class TrackCache:

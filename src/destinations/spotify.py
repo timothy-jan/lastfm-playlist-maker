@@ -57,6 +57,11 @@ class SpotifyDestination(PlaylistDestination):
         self._client: spotipy.Spotify | None = None
         self._auth: SpotifyOAuth | None = None
         self._thread_local = threading.local()
+        # Access token captured in the request thread for use by worker threads.
+        # Flask's session proxy cannot be read outside the request context, so
+        # threaded searches must use a plain token-based client instead of the
+        # session-backed auth manager.
+        self._worker_token: str | None = None
 
     @property
     def auth(self) -> SpotifyOAuth:
@@ -79,10 +84,21 @@ class SpotifyDestination(PlaylistDestination):
         return self._client
 
     def _thread_client(self) -> spotipy.Spotify:
+        """Token-based client safe to use inside worker threads.
+
+        Uses the access token captured in the request thread so it never touches
+        the Flask session proxy (which is unavailable outside a request context).
+        """
+        token = self._worker_token
         client = getattr(self._thread_local, "client", None)
-        if client is None:
-            client = spotipy.Spotify(auth_manager=self.auth)
+        cached_token = getattr(self._thread_local, "token", None)
+        if client is None or cached_token != token:
+            if token:
+                client = spotipy.Spotify(auth=token)
+            else:
+                client = spotipy.Spotify(auth_manager=self.auth)
             self._thread_local.client = client
+            self._thread_local.token = token
         return client
 
     def is_authenticated(self) -> bool:
@@ -103,16 +119,25 @@ class SpotifyDestination(PlaylistDestination):
         return token_info["access_token"]
 
     def _spotify_search(self, query: str) -> list[dict]:
-        for attempt in range(3):
+        if not query:
+            return []
+        for attempt in range(4):
             try:
                 result = self._thread_client().search(
                     q=query, type="track", limit=SEARCH_LIMIT
                 )
                 return result.get("tracks", {}).get("items", [])
             except SpotifyException as exc:
-                if exc.http_status == 429 and attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
+                if exc.http_status == 429 and attempt < 3:
+                    retry_after = 1.0
+                    if exc.headers:
+                        retry_after = float(exc.headers.get("Retry-After", retry_after))
+                    time.sleep(min(retry_after, 5.0))
                     continue
+                return []
+            except Exception:
+                # Never let an unexpected error (e.g. transient network) kill the
+                # whole batch — just treat this query as a miss.
                 return []
         return []
 
@@ -130,6 +155,19 @@ class SpotifyDestination(PlaylistDestination):
                 uri = item.get("uri")
                 if uri:
                     candidates[uri] = item
+
+            # Early exit on the fast pass once we have a confident strict match,
+            # to keep request volume (and rate-limit risk) low on big playlists.
+            if not relaxed and candidates:
+                strict_uri = pick_best_match(
+                    track, list(candidates.values()), relaxed=False
+                )
+                if strict_uri and any(
+                    is_acceptable_match(track, item, tier="strict")
+                    for item in candidates.values()
+                ):
+                    self._track_cache.set_search(track.artist, track.title, strict_uri)
+                    return strict_uri
 
         uri = pick_best_match(track, list(candidates.values()), relaxed=relaxed)
         if uri and not relaxed:
@@ -157,8 +195,11 @@ class SpotifyDestination(PlaylistDestination):
         return items
 
     def _validate_lastfm_uri(self, track: Track, uri: str, item: dict | None) -> bool:
+        # Non-destructive: if Spotify metadata is unavailable (API error, rate
+        # limit, missing track), trust the Last.fm-embedded link rather than
+        # dropping a likely-correct match. Only reject on a confirmed mismatch.
         if not item:
-            return False
+            return True
         spotify_item = {
             "name": item.get("name", ""),
             "artists": item.get("artists", []),
@@ -194,6 +235,13 @@ class SpotifyDestination(PlaylistDestination):
     def _resolve_all_tracks(self, tracks: list[Track]) -> tuple[list[str], list[Track]]:
         if not tracks:
             return [], []
+
+        # Capture a valid access token in the request thread so worker threads
+        # can search Spotify without touching the Flask session proxy.
+        try:
+            self._worker_token = self._access_token()
+        except SpotifyException:
+            self._worker_token = None
 
         url_by_index: list[str] = [
             self._lastfm_resolver.track_url(
