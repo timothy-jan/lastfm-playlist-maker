@@ -179,49 +179,46 @@ def _version_penalty(expected_title: str, candidate_title: str) -> float:
     return penalty
 
 
-def fast_search_queries(track: Track) -> list[str]:
-    """Minimal queries for the first pass — expanded set used on retry."""
-    artist = track.artist.strip()
-    title = track.title.strip()
-    cleaned = clean_title(title)
-    queries = [
-        f'track:"{title}" artist:"{artist}"',
-        f"{title} {artist}",
-        f"track:{title} artist:{artist}",
-    ]
-    if cleaned != title:
-        queries.append(f'track:"{cleaned}" artist:"{artist}"')
-        queries.append(f"track:{cleaned} artist:{artist}")
+def _dedupe(queries: list[str]) -> list[str]:
     seen: set[str] = set()
     unique: list[str] = []
     for query in queries:
         key = query.casefold()
-        if key not in seen:
+        if query and key not in seen:
             seen.add(key)
             unique.append(query)
     return unique
 
 
+def fast_search_queries(track: Track) -> list[str]:
+    """A single precise query for the first pass to minimize API calls.
+
+    A field-filtered query (track:/artist:) on the cleaned title is the most
+    reliable single query, so the common case costs exactly one request.
+    """
+    artist = artist_variants(track.artist)[0]
+    cleaned = clean_title(track.title)
+    return _dedupe([f"track:{cleaned} artist:{artist}"])
+
+
 def search_queries(track: Track) -> list[str]:
+    """A small ordered set of fallback queries used only when the fast pass misses.
+
+    Kept intentionally short (a handful of requests max) to stay well under
+    Spotify's rate limits on large playlists.
+    """
     artist = track.artist.strip()
-    queries: list[str] = []
-
-    for title in title_variants(track.title):
-        queries.extend(
-            [
-                f'track:"{title}" artist:"{artist}"',
-                f"track:{title} artist:{artist}",
-                f"{title} {artist}",
-                f"{title} artist:{artist}",
-            ]
-        )
-        if len(title) >= 2:
-            queries.append(title)
-
     primary_artist = artist_variants(artist)[0]
     cleaned = clean_title(track.title)
-    if cleaned and cleaned != track.title:
-        queries.append(f"{cleaned} {primary_artist}")
+    raw = track.title.strip()
+
+    queries = [
+        f'track:"{cleaned}" artist:"{primary_artist}"',
+        f"{cleaned} {primary_artist}",
+        f"track:{raw} artist:{artist}",
+    ]
+    if len(cleaned) >= 2:
+        queries.append(cleaned)
 
     seen: set[str] = set()
     unique: list[str] = []

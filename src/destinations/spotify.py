@@ -62,6 +62,10 @@ class SpotifyDestination(PlaylistDestination):
         # threaded searches must use a plain token-based client instead of the
         # session-backed auth manager.
         self._worker_token: str | None = None
+        # Circuit breaker: once Spotify hands out a long rate-limit cooldown,
+        # stop firing further search requests for this run to avoid making the
+        # throttle worse. Resolution continues with whatever matched so far.
+        self._rate_limited = threading.Event()
 
     @property
     def auth(self) -> SpotifyOAuth:
@@ -119,20 +123,24 @@ class SpotifyDestination(PlaylistDestination):
         return token_info["access_token"]
 
     def _spotify_search(self, query: str) -> list[dict]:
-        if not query:
+        if not query or self._rate_limited.is_set():
             return []
-        for attempt in range(4):
+        for attempt in range(3):
             try:
                 result = self._thread_client().search(
                     q=query, type="track", limit=SEARCH_LIMIT
                 )
                 return result.get("tracks", {}).get("items", [])
             except SpotifyException as exc:
-                if exc.http_status == 429 and attempt < 3:
+                if exc.http_status == 429:
                     retry_after = 1.0
                     if exc.headers:
                         retry_after = float(exc.headers.get("Retry-After", retry_after))
-                    time.sleep(min(retry_after, 5.0))
+                    # Long cooldown: trip the breaker and stop hammering Spotify.
+                    if retry_after > 8 or attempt >= 2:
+                        self._rate_limited.set()
+                        return []
+                    time.sleep(retry_after)
                     continue
                 return []
             except Exception:
