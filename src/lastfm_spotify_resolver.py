@@ -87,50 +87,42 @@ class LastFmSpotifyResolver:
     ) -> dict[str, str | None]:
         """Resolve many tracks, deduplicating URLs and using disk + memory cache."""
         track_urls: list[tuple[str | None, str, str, list[str]]] = []
-        all_urls: set[str] = set()
-
         for lastfm_url, artist, title in tracks:
             primary = self.track_url(lastfm_url=lastfm_url, artist=artist, title=title)
             candidates = self.candidate_urls(
                 lastfm_url=lastfm_url, artist=artist, title=title
             )
             track_urls.append((lastfm_url, artist, title, candidates))
-            all_urls.update(candidates)
 
-        url_map: dict[str, str | None] = {url: None for url in all_urls}
-        cached = self._cache.get_lastfm_many(list(all_urls))
-        to_fetch: list[str] = []
+        url_map: dict[str, str | None] = {}
 
-        for url in all_urls:
-            if url in self._memory:
-                url_map[url] = self._memory[url]
+        # Phase 1: primary URL per track only (most hits, fewest requests).
+        primary_urls = list(
+            dict.fromkeys(
+                self.track_url(lastfm_url=lf, artist=a, title=t)
+                for lf, a, t, _ in track_urls
+            )
+        )
+        self._fetch_urls(primary_urls, url_map)
+
+        # Phase 2: alternate URLs only for tracks still missing.
+        alternate_urls: list[str] = []
+        for lastfm_url, artist, title, candidates in track_urls:
+            primary = self.track_url(lastfm_url=lastfm_url, artist=artist, title=title)
+            if url_map.get(primary):
                 continue
-            hit, value = cached.get(url, (False, None))
-            if hit and value:
-                self._memory[url] = value
-                url_map[url] = value
-            elif not hit:
-                to_fetch.append(url)
+            for url in candidates:
+                if url != primary and url not in url_map and url not in self._memory:
+                    alternate_urls.append(url)
+        self._fetch_urls(list(dict.fromkeys(alternate_urls)), url_map)
 
-        if to_fetch:
-            fetched: dict[str, str | None] = {}
-            with ThreadPoolExecutor(max_workers=LASTFM_RESOLVE_WORKERS) as executor:
-                futures = {
-                    executor.submit(self._fetch_spotify_id, url): url for url in to_fetch
-                }
-                for future in as_completed(futures):
-                    url = futures[future]
-                    try:
-                        fetched[url] = future.result()
-                    except Exception:
-                        fetched[url] = None
+        return self._primary_results(track_urls, url_map)
 
-            successes = {url: sid for url, sid in fetched.items() if sid}
-            self._cache.set_lastfm_many(successes)
-            for url, spotify_id in fetched.items():
-                self._memory[url] = spotify_id
-                url_map[url] = spotify_id
-
+    def _primary_results(
+        self,
+        track_urls: list[tuple[str | None, str, str, list[str]]],
+        url_map: dict[str, str | None],
+    ) -> dict[str, str | None]:
         primary_results: dict[str, str | None] = {}
         for lastfm_url, artist, title, candidates in track_urls:
             primary = self.track_url(lastfm_url=lastfm_url, artist=artist, title=title)
@@ -140,8 +132,46 @@ class LastFmSpotifyResolver:
                 if spotify_id:
                     break
             primary_results[primary] = spotify_id
-
         return primary_results
+
+    def _fetch_urls(self, urls: list[str], url_map: dict[str, str | None]) -> None:
+        to_fetch = [url for url in urls if url not in self._memory and url not in url_map]
+        if not to_fetch:
+            return
+
+        cached = self._cache.get_lastfm_many(to_fetch)
+        still_fetch: list[str] = []
+        for url in to_fetch:
+            if url in self._memory:
+                url_map[url] = self._memory[url]
+                continue
+            hit, value = cached.get(url, (False, None))
+            if hit and value:
+                self._memory[url] = value
+                url_map[url] = value
+            elif not hit:
+                still_fetch.append(url)
+
+        if not still_fetch:
+            return
+
+        fetched: dict[str, str | None] = {}
+        with ThreadPoolExecutor(max_workers=LASTFM_RESOLVE_WORKERS) as executor:
+            futures = {
+                executor.submit(self._fetch_spotify_id, url): url for url in still_fetch
+            }
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    fetched[url] = future.result()
+                except Exception:
+                    fetched[url] = None
+
+        successes = {url: sid for url, sid in fetched.items() if sid}
+        self._cache.set_lastfm_many(successes)
+        for url, spotify_id in fetched.items():
+            self._memory[url] = spotify_id
+            url_map[url] = spotify_id
 
     def _fetch_spotify_id(self, lastfm_url: str) -> str | None:
         try:

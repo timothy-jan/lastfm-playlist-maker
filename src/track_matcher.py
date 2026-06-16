@@ -76,6 +76,27 @@ def title_matches(expected: str, candidate: str) -> bool:
     return a in b or b in a or a[:4] == b[:4]
 
 
+def fast_search_queries(track: Track) -> list[str]:
+    """Minimal queries for the first pass — expanded set used on retry."""
+    artist = track.artist.strip()
+    title = track.title.strip()
+    cleaned = clean_title(title)
+    queries = [
+        f"{title} {artist}",
+        f"track:{title} artist:{artist}",
+    ]
+    if cleaned != title:
+        queries.append(f"track:{cleaned} artist:{artist}")
+    seen: set[str] = set()
+    unique: list[str] = []
+    for query in queries:
+        key = query.casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(query)
+    return unique
+
+
 def search_queries(track: Track) -> list[str]:
     artist = track.artist.strip()
     queries: list[str] = []

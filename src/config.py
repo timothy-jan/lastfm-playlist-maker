@@ -99,5 +99,5 @@ def _int_env(name: str, default: int) -> int:
 
 # Performance tuning (override via .env)
 LASTFM_PAGE_SIZE = _int_env("LASTFM_PAGE_SIZE", 1000)
-LASTFM_RESOLVE_WORKERS = _int_env("LASTFM_RESOLVE_WORKERS", 16)
-SPOTIFY_SEARCH_WORKERS = _int_env("SPOTIFY_SEARCH_WORKERS", 4)
+LASTFM_RESOLVE_WORKERS = _int_env("LASTFM_RESOLVE_WORKERS", 24)
+SPOTIFY_SEARCH_WORKERS = _int_env("SPOTIFY_SEARCH_WORKERS", 6)

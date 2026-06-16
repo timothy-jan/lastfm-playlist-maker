@@ -144,12 +144,6 @@ code {
   word-break: break-all;
 }
 
-.setup-note {
-  margin: 0.75rem 0 0;
-  color: var(--muted);
-  font-size: 0.88rem;
-}
-
 .setup-card {
   margin-bottom: 1rem;
 }

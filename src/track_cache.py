@@ -116,6 +116,25 @@ class TrackCache:
             return False, None
         return True, value
 
+    def get_search_many(
+        self, pairs: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], tuple[bool, str | None]]:
+        if not pairs:
+            return {}
+        unique = list(dict.fromkeys(pairs))
+        placeholders = ",".join("(?, ?)" for _ in unique)
+        flat = [part for pair in unique for part in pair]
+        rows = self.conn.execute(
+            f"SELECT artist, title, spotify_uri FROM track_search WHERE (artist, title) IN ({placeholders})",
+            flat,
+        ).fetchall()
+        found = {
+            (artist, title): (True, spotify_uri)
+            for artist, title, spotify_uri in rows
+            if spotify_uri
+        }
+        return {pair: found.get(pair, (False, None)) for pair in pairs}
+
     def set_search(self, artist: str, title: str, spotify_uri: str | None) -> None:
         if not spotify_uri:
             return

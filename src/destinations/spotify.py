@@ -23,13 +23,21 @@ from ..lastfm_spotify_resolver import LastFmSpotifyResolver
 from ..models import PlaylistCreateResult, Track
 from ..spotify_playlist import add_tracks_to_playlist
 from ..track_cache import TrackCache
-from ..track_matcher import pick_best_match, primary_search_query, search_queries
+from ..track_matcher import (
+    fast_search_queries,
+    pick_best_match,
+    search_queries,
+)
 
 if TYPE_CHECKING:
     from spotipy.cache_handler import CacheHandler
 
 SCOPES = "playlist-modify-public playlist-modify-private"
 SEARCH_LIMIT = 10
+
+
+def _track_key(track: Track) -> tuple[str, str]:
+    return track.artist.casefold(), track.title.casefold()
 
 
 class SpotifyDestination(PlaylistDestination):
@@ -113,9 +121,7 @@ class SpotifyDestination(PlaylistDestination):
             if hit and cached_uri:
                 return cached_uri
 
-        queries = search_queries(track)
-        primary = primary_search_query(track)
-        ordered = [primary] + [query for query in queries if query != primary]
+        ordered = search_queries(track) if relaxed else fast_search_queries(track)
 
         for query in ordered:
             items = self._spotify_search(query)
@@ -168,37 +174,84 @@ class SpotifyDestination(PlaylistDestination):
             [(track.lastfm_url, track.artist, track.title) for track in tracks]
         )
 
-        lastfm_uris: dict[int, str] = {}
-        need_search: list[tuple[int, Track]] = []
+        resolved: list[str | None] = [None] * len(tracks)
+        uri_by_key: dict[tuple[str, str], str] = {}
+
         for index, track in enumerate(tracks):
             spotify_id = lastfm_ids.get(url_by_index[index])
             if spotify_id:
-                lastfm_uris[index] = LastFmSpotifyResolver.to_spotify_uri(spotify_id)
-            else:
-                need_search.append((index, track))
+                uri = LastFmSpotifyResolver.to_spotify_uri(spotify_id)
+                resolved[index] = uri
+                uri_by_key[_track_key(track)] = uri
+                self._track_cache.set_search(track.artist, track.title, uri)
 
-        search_uris = self._search_tracks_parallel(
-            [track for _, track in need_search], relaxed=False
-        )
-        search_by_index = {
-            original_index: search_uris.get(position)
-            for position, (original_index, _) in enumerate(need_search)
-        }
-
-        resolved: list[str | None] = []
+        need_search: list[Track] = []
+        need_search_indices: list[int] = []
         for index, track in enumerate(tracks):
-            resolved.append(lastfm_uris.get(index) or search_by_index.get(index))
+            if resolved[index]:
+                continue
+            key = _track_key(track)
+            if key in uri_by_key:
+                resolved[index] = uri_by_key[key]
+                continue
+            need_search.append(track)
+            need_search_indices.append(index)
+
+        if need_search:
+            unique_groups: dict[tuple[str, str], list[int]] = {}
+            unique_tracks: list[Track] = []
+            for track, index in zip(need_search, need_search_indices):
+                key = _track_key(track)
+                if key not in unique_groups:
+                    unique_groups[key] = []
+                    unique_tracks.append(track)
+                unique_groups[key].append(index)
+
+            pairs = [(track.artist, track.title) for track in unique_tracks]
+            cached = self._track_cache.get_search_many(pairs)
+            still_search: list[Track] = []
+            still_search_keys: list[tuple[str, str]] = []
+            for track in unique_tracks:
+                key = _track_key(track)
+                hit, uri = cached.get((track.artist, track.title), (False, None))
+                if hit and uri:
+                    uri_by_key[key] = uri
+                    for index in unique_groups[key]:
+                        resolved[index] = uri
+                else:
+                    still_search.append(track)
+                    still_search_keys.append(key)
+
+            if still_search:
+                search_uris = self._search_tracks_parallel(still_search, relaxed=False)
+                for position, key in enumerate(still_search_keys):
+                    uri = search_uris.get(position)
+                    if uri:
+                        uri_by_key[key] = uri
+                        for index in unique_groups[key]:
+                            resolved[index] = uri
 
         retry_indices = [index for index, uri in enumerate(resolved) if not uri]
-        retry_tracks = [tracks[index] for index in retry_indices]
-        if retry_tracks:
+        if retry_indices:
+            retry_groups: dict[tuple[str, str], list[int]] = {}
+            retry_tracks: list[Track] = []
+            for index in retry_indices:
+                track = tracks[index]
+                key = _track_key(track)
+                if key not in retry_groups:
+                    retry_groups[key] = []
+                    retry_tracks.append(track)
+                retry_groups[key].append(index)
+
             retry_uris = self._search_tracks_parallel(retry_tracks, relaxed=True)
-            for position, index in enumerate(retry_indices):
-                retry_uri = retry_uris.get(position)
-                if retry_uri:
-                    resolved[index] = retry_uri
-                    track = tracks[index]
-                    self._track_cache.set_search(track.artist, track.title, retry_uri)
+            for position, track in enumerate(retry_tracks):
+                uri = retry_uris.get(position)
+                if not uri:
+                    continue
+                key = _track_key(track)
+                for index in retry_groups[key]:
+                    resolved[index] = uri
+                self._track_cache.set_search(track.artist, track.title, uri)
 
         uris = [uri for uri in resolved if uri]
         not_found = [track for uri, track in zip(resolved, tracks) if not uri]

@@ -14,16 +14,6 @@
     <li>In Development Mode, add your Spotify email under <strong>User Management</strong> (app owner needs Premium)</li>
   </ol>
 </section>
-{% elif not spotify_connected %}
-<section class="card setup-card">
-  <h2>Before you connect Spotify</h2>
-  <p>
-    In your <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify Developer Dashboard</a>,
-    open the app matching your Client ID, go to <strong>Settings</strong>, and add this <strong>exact</strong> redirect URI. Then click <strong>Save</strong> at the bottom.
-  </p>
-  <code class="setup-uri">{{ spotify_callback_url }}</code>
-  <p class="setup-note">No trailing slash. Must be <code>https://</code>, not <code>http://</code>.</p>
-</section>
 {% endif %}
 
 <section class="card">

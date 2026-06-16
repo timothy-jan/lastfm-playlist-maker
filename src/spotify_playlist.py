@@ -18,7 +18,7 @@ def _http_session() -> requests.Session:
     if _session is None:
         _session = requests.Session()
         retry = Retry(total=2, backoff_factor=0.1, status_forcelist=(429, 500, 502, 503, 504))
-        adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=retry)
+        adapter = HTTPAdapter(pool_connections=8, pool_maxsize=8, max_retries=retry)
         _session.mount("https://", adapter)
     return _session
 
