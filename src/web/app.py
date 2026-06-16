@@ -8,7 +8,15 @@ from flask import Flask, flash, jsonify, redirect, render_template, request, ses
 from spotipy.cache_handler import FlaskSessionCacheHandler
 from spotipy.exceptions import SpotifyException
 
-from ..config import flask_secret_key, has_lastfm_config, has_spotify_config, lastfm_api_key
+from ..config import (
+    flask_secret_key,
+    has_lastfm_config,
+    has_spotify_config,
+    is_production,
+    lastfm_api_key,
+    public_base_url,
+    spotify_redirect_uri,
+)
 from ..demo_data import DEMO_TRACKS
 from ..destinations.spotify import SpotifyDestination
 from ..lastfm_client import LastFmClient, LastFmError
@@ -23,6 +31,25 @@ LAST_RESULT_KEY = "last_result"
 def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = flask_secret_key()
+
+    if is_production():
+        app.config["SESSION_COOKIE_SECURE"] = True
+        app.config["SESSION_COOKIE_HTTPONLY"] = True
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+    @app.context_processor
+    def inject_globals():
+        return {
+            "spotify_callback_url": spotify_redirect_uri(),
+            "public_base_url": public_base_url(),
+        }
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok"}
 
     def spotify_destination() -> SpotifyDestination:
         return SpotifyDestination(

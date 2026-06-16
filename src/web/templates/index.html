@@ -8,7 +8,7 @@
   <ol class="setup-steps">
     <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify Developer Dashboard</a></li>
     <li>Create an app (or open an existing one)</li>
-    <li>Under <strong>Redirect URIs</strong>, add:<br><code class="setup-uri">http://127.0.0.1:5000/callback</code></li>
+    <li>Under <strong>Redirect URIs</strong>, add:<br><code class="setup-uri">{{ spotify_callback_url }}</code></li>
     <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> into your <code>.env</code> file</li>
     <li>Restart the app, then click <strong>Connect Spotify</strong></li>
     <li>In Development Mode, add your Spotify email under <strong>User Management</strong> (app owner needs Premium)</li>

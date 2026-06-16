@@ -46,8 +46,29 @@ def flask_secret_key() -> str:
     return os.getenv("FLASK_SECRET_KEY", "dev-change-me-in-production").strip()
 
 
+def public_base_url() -> str | None:
+    """Canonical HTTPS URL when deployed (Render sets RENDER_EXTERNAL_URL)."""
+    render_url = _get("RENDER_EXTERNAL_URL")
+    if render_url:
+        return render_url.rstrip("/")
+    app_url = _get("APP_URL")
+    if app_url:
+        return app_url.rstrip("/")
+    return None
+
+
 def spotify_redirect_uri() -> str:
-    return os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/callback").strip()
+    explicit = _get("SPOTIFY_REDIRECT_URI")
+    if explicit:
+        return explicit
+    base = public_base_url()
+    if base:
+        return f"{base}/callback"
+    return "http://127.0.0.1:5000/callback"
+
+
+def is_production() -> bool:
+    return bool(_get("RENDER") or _get("FLASK_ENV") == "production")
 
 
 def _int_env(name: str, default: int) -> int:
