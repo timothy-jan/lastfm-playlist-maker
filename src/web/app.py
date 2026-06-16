@@ -91,7 +91,13 @@ def create_app() -> Flask:
     def callback():
         error = request.args.get("error")
         if error:
-            flash(f"Spotify authorization failed: {error}", "error")
+            message = f"Spotify authorization failed: {error}"
+            if error in {"redirect_uri_mismatch", "invalid_request"}:
+                message = (
+                    f"Spotify redirect URI mismatch. Add this exact URI in your Spotify app settings "
+                    f"and click Save: {spotify_redirect_uri()}"
+                )
+            flash(message, "error")
             return redirect(url_for("index"))
 
         code = request.args.get("code")
