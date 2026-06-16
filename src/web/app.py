@@ -45,6 +45,7 @@ def create_app() -> Flask:
         return {
             "spotify_callback_url": spotify_redirect_uri(),
             "public_base_url": public_base_url(),
+            "vercel_analytics": bool(os.getenv("VERCEL")),
         }
 
     @app.get("/health")
