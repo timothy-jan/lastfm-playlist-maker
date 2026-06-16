@@ -6,9 +6,9 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from .config import PROJECT_ROOT
+from .config import cache_dir
 
-CACHE_DIR = PROJECT_ROOT / ".cache"
+CACHE_DIR = cache_dir()
 CACHE_DB = CACHE_DIR / "spotify_tracks.db"
 
 

@@ -47,13 +47,22 @@ def flask_secret_key() -> str:
 
 
 def public_base_url() -> str | None:
-    """Canonical HTTPS URL when deployed (Render sets RENDER_EXTERNAL_URL)."""
-    render_url = _get("RENDER_EXTERNAL_URL")
-    if render_url:
-        return render_url.rstrip("/")
+    """Canonical HTTPS URL when deployed."""
     app_url = _get("APP_URL")
     if app_url:
         return app_url.rstrip("/")
+
+    prod_url = _get("VERCEL_PROJECT_PRODUCTION_URL")
+    if prod_url:
+        return f"https://{prod_url.rstrip('/')}"
+
+    vercel_url = _get("VERCEL_URL")
+    if vercel_url:
+        return f"https://{vercel_url.rstrip('/')}"
+
+    render_url = _get("RENDER_EXTERNAL_URL")
+    if render_url:
+        return render_url.rstrip("/")
     return None
 
 
@@ -68,7 +77,14 @@ def spotify_redirect_uri() -> str:
 
 
 def is_production() -> bool:
-    return bool(_get("RENDER") or _get("FLASK_ENV") == "production")
+    return bool(_get("VERCEL") or _get("RENDER") or _get("FLASK_ENV") == "production")
+
+
+def cache_dir() -> Path:
+    """Writable cache directory (Vercel only allows /tmp)."""
+    if _get("VERCEL"):
+        return Path("/tmp/lastfm-playlist-maker")
+    return PROJECT_ROOT / ".cache"
 
 
 def _int_env(name: str, default: int) -> int:
