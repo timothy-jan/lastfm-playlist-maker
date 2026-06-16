@@ -164,7 +164,7 @@ class SpotifyDestination(PlaylistDestination):
             "artists": item.get("artists", []),
             "uri": uri,
         }
-        return is_acceptable_match(track, spotify_item, relaxed=True)
+        return is_acceptable_match(track, spotify_item, tier="best_effort")
 
     def _search_tracks_parallel(
         self, tracks: list[Track], *, relaxed: bool = False

@@ -27,7 +27,7 @@ CASES = [
     (
         Track("Crowd Lu", "繁華攏是夢 (Live 版)"),
         {"name": "繁華攏是夢", "artists": [{"name": "Crowd Lu"}], "uri": "spotify:track:4"},
-        False,
+        True,
     ),
     (
         Track("Crowd Lu", "繁華攏是夢 (Live 版)"),
@@ -57,16 +57,11 @@ for title in [
 print("\nAcceptance checks")
 failed = 0
 for track, item, expected in CASES:
-    strict = is_acceptable_match(track, item, relaxed=False)
-    relaxed = is_acceptable_match(track, item, relaxed=True)
     picked = pick_best_match(track, [item], relaxed=False) is not None
-    ok = (strict == expected) or (expected and relaxed and not strict and picked)
-    if expected:
-        ok = relaxed or strict or pick_best_match(track, [item], relaxed=True)
-    else:
-        ok = not strict and not relaxed
-    status = "OK" if ok else "FAIL"
-    if not ok:
+    if not picked and expected:
+        picked = pick_best_match(track, [item], relaxed=True) is not None
+    status = "OK" if picked == expected else "FAIL"
+    if picked != expected:
         failed += 1
     print(f"  {status}: {track.artist} — {track.title} vs {item['name']}")
 

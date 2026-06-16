@@ -5,8 +5,11 @@ from __future__ import annotations
 import re
 import unicodedata
 from difflib import SequenceMatcher
+from typing import Literal
 
 from .models import Track
+
+MatchTier = Literal["strict", "relaxed", "best_effort"]
 
 # Strip featured artists, live/remaster tags, etc.
 _TITLE_CLEANUP = re.compile(
@@ -37,6 +40,12 @@ _VERSION_TAGS = (
     "edit",
     "版",
 )
+
+_TIER_THRESHOLDS: dict[MatchTier, tuple[float, float, float]] = {
+    "strict": (0.78, 0.65, 0.45),
+    "relaxed": (0.66, 0.54, 0.36),
+    "best_effort": (0.48, 0.40, 0.24),
+}
 
 
 def normalize_compare(text: str) -> str:
@@ -117,18 +126,27 @@ def similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def artist_matches(expected: str, candidate: str) -> bool:
+def artist_correlates(
+    expected: str,
+    candidate: str,
+    *,
+    minimum: float = 0.65,
+) -> bool:
     for variant in artist_variants(expected):
-        if similarity(variant, candidate) >= 0.72:
+        if similarity(variant, candidate) >= minimum:
             return True
     return False
 
 
+def artist_matches(expected: str, candidate: str) -> bool:
+    return artist_correlates(expected, candidate, minimum=0.65)
+
+
 def title_matches(expected: str, candidate: str) -> bool:
     for variant in title_variants(expected):
-        if similarity(variant, candidate) >= 0.78:
+        if similarity(variant, candidate) >= 0.70:
             return True
-        if similarity(clean_title(variant), candidate) >= 0.78:
+        if similarity(clean_title(variant), candidate) >= 0.70:
             return True
     return False
 
@@ -157,7 +175,7 @@ def _version_penalty(expected_title: str, candidate_title: str) -> float:
         expected_has = tag in expected
         candidate_has = tag in candidate
         if expected_has != candidate_has:
-            penalty -= 0.22
+            penalty -= 0.10
     return penalty
 
 
@@ -215,42 +233,72 @@ def search_queries(track: Track) -> list[str]:
     return unique
 
 
-def _score_match(track: Track, item: dict) -> float:
-    item_title = item.get("name", "")
-    item_artists = [a.get("name", "") for a in item.get("artists", [])]
-
-    title_score = _best_title_similarity(track.title, item_title)
-    artist_score = _best_artist_similarity(track.artist, item_artists)
-    score = (0.68 * title_score) + (0.32 * artist_score)
-    score += _version_penalty(track.title, item_title)
-    return max(0.0, min(1.0, score))
-
-
-def match_components(track: Track, item: dict) -> tuple[float, float, float]:
+def match_components(
+    track: Track,
+    item: dict,
+    *,
+    apply_version_penalty: bool = True,
+) -> tuple[float, float, float]:
     """Return combined, title, and artist scores for a Spotify search item."""
     item_title = item.get("name", "")
     item_artists = [a.get("name", "") for a in item.get("artists", [])]
     title_score = _best_title_similarity(track.title, item_title)
     artist_score = _best_artist_similarity(track.artist, item_artists)
     combined = (0.68 * title_score) + (0.32 * artist_score)
-    combined += _version_penalty(track.title, item_title)
+    if apply_version_penalty:
+        combined += _version_penalty(track.title, item_title)
     combined = max(0.0, min(1.0, combined))
     return combined, title_score, artist_score
+
+
+_TIER_ARTIST_MINIMUM: dict[MatchTier, float] = {
+    "strict": 0.65,
+    "relaxed": 0.55,
+    "best_effort": 0.45,
+}
 
 
 def is_acceptable_match(
     track: Track,
     item: dict,
     *,
-    relaxed: bool = False,
+    tier: MatchTier = "strict",
 ) -> bool:
-    combined, title_score, artist_score = match_components(track, item)
-    if relaxed:
-        return combined >= 0.74 and title_score >= 0.62 and artist_score >= 0.45
-    return combined >= 0.84 and title_score >= 0.72 and artist_score >= 0.52
+    item_artists = [a.get("name", "") for a in item.get("artists", [])]
+    artist_ok = any(
+        artist_correlates(
+            track.artist,
+            name,
+            minimum=_TIER_ARTIST_MINIMUM[tier],
+        )
+        for name in item_artists
+    )
+    if not artist_ok:
+        return False
+
+    apply_penalty = tier == "strict"
+    combined, title_score, artist_score = match_components(
+        track, item, apply_version_penalty=apply_penalty
+    )
+    min_combined, min_title, min_artist = _TIER_THRESHOLDS[tier]
+
+    if combined >= min_combined and title_score >= min_title and artist_score >= min_artist:
+        return True
+
+    # Same artist, title close enough after cleanup (live/remaster/hashtag variants).
+    if tier != "strict" and title_score >= 0.68:
+        return True
+
+    return False
 
 
-def pick_best_match(track: Track, items: list[dict], *, relaxed: bool = False) -> str | None:
+def pick_best_match(
+    track: Track,
+    items: list[dict],
+    *,
+    relaxed: bool = False,
+) -> str | None:
+    """Pick the best Spotify URI, falling back to weaker tiers when needed."""
     if not items:
         return None
 
@@ -259,7 +307,17 @@ def pick_best_match(track: Track, items: list[dict], *, relaxed: bool = False) -
         key=lambda pair: pair[0],
         reverse=True,
     )
-    for _, item in scored:
-        if is_acceptable_match(track, item, relaxed=relaxed):
-            return item["uri"]
+
+    tiers: list[MatchTier] = (
+        ["relaxed", "best_effort"] if relaxed else ["strict", "relaxed", "best_effort"]
+    )
+    for tier in tiers:
+        for _, item in scored:
+            if is_acceptable_match(track, item, tier=tier):
+                return item["uri"]
     return None
+
+
+def _score_match(track: Track, item: dict) -> float:
+    combined, _, _ = match_components(track, item, apply_version_penalty=False)
+    return combined
