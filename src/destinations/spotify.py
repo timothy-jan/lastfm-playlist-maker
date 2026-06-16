@@ -176,6 +176,7 @@ class SpotifyDestination(PlaylistDestination):
 
         resolved: list[str | None] = [None] * len(tracks)
         uri_by_key: dict[tuple[str, str], str] = {}
+        cache_writes: list[tuple[str, str, str]] = []
 
         for index, track in enumerate(tracks):
             spotify_id = lastfm_ids.get(url_by_index[index])
@@ -183,7 +184,7 @@ class SpotifyDestination(PlaylistDestination):
                 uri = LastFmSpotifyResolver.to_spotify_uri(spotify_id)
                 resolved[index] = uri
                 uri_by_key[_track_key(track)] = uri
-                self._track_cache.set_search(track.artist, track.title, uri)
+                cache_writes.append((track.artist, track.title, uri))
 
         need_search: list[Track] = []
         need_search_indices: list[int] = []
@@ -251,11 +252,27 @@ class SpotifyDestination(PlaylistDestination):
                 key = _track_key(track)
                 for index in retry_groups[key]:
                     resolved[index] = uri
-                self._track_cache.set_search(track.artist, track.title, uri)
+                cache_writes.append((track.artist, track.title, uri))
+
+        if cache_writes:
+            self._track_cache.set_search_many(cache_writes)
 
         uris = [uri for uri in resolved if uri]
         not_found = [track for uri, track in zip(resolved, tracks) if not uri]
         return uris, not_found
+
+    def resolve_tracks(self, tracks: list[Track]) -> tuple[list[str], list[Track]]:
+        return self._resolve_all_tracks(tracks)
+
+    def create_empty_playlist(self, name: str, description: str) -> tuple[str, str]:
+        playlist = self.client.current_user_playlist_create(
+            name, public=True, description=description
+        )
+        return playlist["id"], playlist["external_urls"]["spotify"]
+
+    def append_tracks(self, playlist_id: str, uris: list[str]) -> None:
+        if uris:
+            add_tracks_to_playlist(self._access_token(), playlist_id, uris)
 
     def create_playlist(self, name: str, description: str, tracks: list[Track]) -> PlaylistCreateResult:
         uris, not_found = self._resolve_all_tracks(tracks)
@@ -271,7 +288,7 @@ class SpotifyDestination(PlaylistDestination):
         playlist_id = playlist["id"]
         playlist_url = playlist["external_urls"]["spotify"]
 
-        add_tracks_to_playlist(self._access_token(), playlist_id, uris)
+        self.append_tracks(playlist_id, uris)
 
         return PlaylistCreateResult(
             url=playlist_url,

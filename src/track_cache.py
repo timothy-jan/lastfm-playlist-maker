@@ -135,6 +135,16 @@ class TrackCache:
         }
         return {pair: found.get(pair, (False, None)) for pair in pairs}
 
+    def set_search_many(self, entries: list[tuple[str, str, str]]) -> None:
+        if not entries:
+            return
+        with self._db_lock:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO track_search (artist, title, spotify_uri) VALUES (?, ?, ?)",
+                entries,
+            )
+            self.conn.commit()
+
     def set_search(self, artist: str, title: str, spotify_uri: str | None) -> None:
         if not spotify_uri:
             return

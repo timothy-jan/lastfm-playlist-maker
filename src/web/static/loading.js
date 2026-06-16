@@ -12,8 +12,8 @@
     },
     create: {
       title: "Generating playlist",
-      message: "Resolving Spotify links from Last.fm and building your playlist…",
-      detail: "Large playlists can take a few minutes. Please keep this tab open.",
+      message: "Resolving Spotify links and building your playlist…",
+      detail: "Large playlists are processed in batches. Please keep this tab open.",
     },
   };
 
@@ -33,9 +33,49 @@
     document.body.classList.add("is-loading");
   }
 
+  function updateProgress(processed, total) {
+    if (!detail || !total) return;
+    const pct = Math.min(100, Math.round((processed / total) * 100));
+    detail.textContent = `Processed ${processed.toLocaleString()} of ${total.toLocaleString()} tracks (${pct}%)…`;
+  }
+
   window.showLoading = showLoading;
   window.hideLoading = hideLoading;
   window.createPlaylist = createPlaylist;
+
+  async function processChunks(start) {
+    const { tracks, chunk_size: chunkSize, playlist_id: playlistId, total } = start;
+    const size = chunkSize || 120;
+
+    for (let offset = 0; offset < tracks.length; offset += size) {
+      updateProgress(offset, total);
+      const slice = tracks.slice(offset, offset + size);
+      const response = await fetch("/create/chunk", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify({
+          playlist_id: playlistId,
+          tracks: slice,
+          offset,
+        }),
+      });
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || "Chunk processing failed.");
+      }
+
+      updateProgress(data.processed || offset + slice.length, total);
+
+      if (data.done && data.redirect) {
+        window.location.href = data.redirect;
+        return;
+      }
+    }
+  }
 
   async function createPlaylist(url, formData) {
     showLoading("create");
@@ -46,6 +86,13 @@
         headers: { "X-Requested-With": "XMLHttpRequest" },
       });
       const data = await response.json();
+
+      if (data.success && data.chunked) {
+        await processChunks(data);
+        hideLoading();
+        return;
+      }
+
       hideLoading();
 
       if (data.success && data.redirect) {
@@ -58,7 +105,7 @@
       window.location.href = "/";
     } catch (error) {
       hideLoading();
-      alert("Something went wrong while creating the playlist.");
+      alert(error.message || "Something went wrong while creating the playlist.");
       window.location.href = "/";
     }
   }

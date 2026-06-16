@@ -99,5 +99,14 @@ def _int_env(name: str, default: int) -> int:
 
 # Performance tuning (override via .env)
 LASTFM_PAGE_SIZE = _int_env("LASTFM_PAGE_SIZE", 1000)
-LASTFM_RESOLVE_WORKERS = _int_env("LASTFM_RESOLVE_WORKERS", 24)
-SPOTIFY_SEARCH_WORKERS = _int_env("SPOTIFY_SEARCH_WORKERS", 6)
+LASTFM_RESOLVE_WORKERS = _int_env("LASTFM_RESOLVE_WORKERS", 32)
+SPOTIFY_SEARCH_WORKERS = _int_env("SPOTIFY_SEARCH_WORKERS", 8)
+PLAYLIST_CHUNK_SIZE = _int_env("PLAYLIST_CHUNK_SIZE", 120)
+PLAYLIST_CHUNK_THRESHOLD = _int_env("PLAYLIST_CHUNK_THRESHOLD", 400)
+
+
+def should_chunk_playlist(track_count: int) -> bool:
+    """Process large playlists in multiple requests to avoid serverless timeouts."""
+    if track_count <= PLAYLIST_CHUNK_THRESHOLD:
+        return False
+    return True

@@ -20,12 +20,14 @@ from ..config import (
 from ..demo_data import DEMO_TRACKS
 from ..destinations.spotify import SpotifyDestination
 from ..lastfm_client import LastFmClient, LastFmError
+from ..config import PLAYLIST_CHUNK_SIZE, should_chunk_playlist
 from ..date_range import default_custom_range
 from ..models import MAX_TRACK_LIMIT, TIME_PERIODS, BuildResult, Track
-from ..playlist_builder import create_playlist_from_lastfm, fetch_tracks
+from ..playlist_builder import fetch_tracks, prepare_playlist
 
 PENDING_FORM_KEY = "pending_form"
 LAST_RESULT_KEY = "last_result"
+CHUNK_JOB_KEY = "chunk_job"
 
 
 def create_app() -> Flask:
@@ -125,9 +127,8 @@ def create_app() -> Flask:
         lastfm = LastFmClient(lastfm_api_key())
         spotify = spotify_destination()
         try:
-            result = create_playlist_from_lastfm(
+            tracks, name, description, _display_name = prepare_playlist(
                 lastfm,
-                spotify,
                 params["username"],
                 source=params["source"],
                 period=params["period"],
@@ -141,12 +142,97 @@ def create_app() -> Flask:
             return _error_response(str(exc))
         except RuntimeError as exc:
             return _error_response(str(exc))
+        except Exception as exc:
+            return _error_response(f"Something went wrong: {exc}")
+
+        if should_chunk_playlist(len(tracks)):
+            return _start_chunked_playlist(spotify, tracks, name, description)
+
+        try:
+            create_result = spotify.create_playlist(name, description, tracks)
         except SpotifyException as exc:
             return _error_response(_spotify_error_message(exc))
         except Exception as exc:
             return _error_response(f"Something went wrong: {exc}")
 
+        result = BuildResult(
+            url=create_result.url,
+            tracks=tracks,
+            playlist_name=name,
+            lastfm_user=_display_name,
+            create_result=create_result,
+        )
         return _success_response(result, spotify.is_authenticated())
+
+    @app.post("/create/chunk")
+    def create_playlist_chunk():
+        if not _wants_json():
+            return redirect(url_for("index"))
+
+        job = session.get(CHUNK_JOB_KEY)
+        if not job:
+            return jsonify({"success": False, "error": "Session expired. Please try again."}), 400
+
+        payload = request.get_json(silent=True) or {}
+        if payload.get("playlist_id") != job["playlist_id"]:
+            return jsonify({"success": False, "error": "Session expired. Please try again."}), 400
+
+        tracks = [_track_from_dict(item) for item in payload.get("tracks", [])]
+        if not tracks:
+            return jsonify({"success": False, "error": "No tracks in chunk."}), 400
+
+        spotify = spotify_destination()
+        try:
+            uris, not_found = spotify.resolve_tracks(tracks)
+            if uris:
+                spotify.append_tracks(job["playlist_id"], uris)
+        except SpotifyException as exc:
+            return jsonify({"success": False, "error": _spotify_error_message(exc)}), 400
+        except Exception as exc:
+            return jsonify({"success": False, "error": f"Something went wrong: {exc}"}), 400
+
+        job["matched"] += len(uris)
+        job["not_found"].extend(
+            {"artist": track.artist, "title": track.title} for track in not_found
+        )
+        session[CHUNK_JOB_KEY] = job
+
+        processed = int(payload.get("offset", 0)) + len(tracks)
+        done = processed >= job["total"]
+
+        if done:
+            if job["matched"] == 0:
+                session.pop(CHUNK_JOB_KEY, None)
+                return jsonify(
+                    {"success": False, "error": "Could not match any tracks on Spotify."}
+                ), 400
+
+            session[LAST_RESULT_KEY] = {
+                "url": job["playlist_url"],
+                "playlist_name": job["playlist_name"],
+                "matched": job["matched"],
+                "total": job["total"],
+                "not_found": job["not_found"],
+            }
+            session.pop(CHUNK_JOB_KEY, None)
+            return jsonify(
+                {
+                    "success": True,
+                    "done": True,
+                    "redirect": url_for("show_result"),
+                    "processed": processed,
+                    "total": job["total"],
+                }
+            )
+
+        return jsonify(
+            {
+                "success": True,
+                "done": False,
+                "processed": processed,
+                "total": job["total"],
+            }
+        )
 
     @app.get("/result")
     def show_result():
@@ -316,6 +402,59 @@ def create_app() -> Flask:
         )
 
     return app
+
+
+def _start_chunked_playlist(spotify, tracks: list[Track], name: str, description: str):
+    try:
+        playlist_id, playlist_url = spotify.create_empty_playlist(name, description)
+    except SpotifyException as exc:
+        return _error_response(_spotify_error_message(exc))
+    except Exception as exc:
+        return _error_response(f"Something went wrong: {exc}")
+
+    session[CHUNK_JOB_KEY] = {
+        "playlist_id": playlist_id,
+        "playlist_url": playlist_url,
+        "playlist_name": name,
+        "matched": 0,
+        "not_found": [],
+        "total": len(tracks),
+    }
+
+    if _wants_json():
+        return jsonify(
+            {
+                "success": True,
+                "chunked": True,
+                "chunk_size": PLAYLIST_CHUNK_SIZE,
+                "playlist_id": playlist_id,
+                "total": len(tracks),
+                "tracks": [_track_to_dict(track) for track in tracks],
+            }
+        )
+
+    flash("Large playlist started — this UI path should use AJAX.", "info")
+    return redirect(url_for("index"))
+
+
+def _track_to_dict(track: Track) -> dict:
+    return {
+        "artist": track.artist,
+        "title": track.title,
+        "lastfm_url": track.lastfm_url,
+        "playcount": track.playcount,
+        "loved": track.loved,
+    }
+
+
+def _track_from_dict(data: dict) -> Track:
+    return Track(
+        artist=data["artist"],
+        title=data["title"],
+        lastfm_url=data.get("lastfm_url"),
+        playcount=data.get("playcount"),
+        loved=bool(data.get("loved")),
+    )
 
 
 def _wants_json() -> bool:

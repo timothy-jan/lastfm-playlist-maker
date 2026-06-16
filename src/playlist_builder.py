@@ -102,9 +102,8 @@ def build_playlist_description(
     return " ".join(parts)
 
 
-def create_playlist_from_lastfm(
+def prepare_playlist(
     lastfm: LastFmClient,
-    destination: PlaylistDestination,
     username: str,
     *,
     source: str = "top",
@@ -114,7 +113,8 @@ def create_playlist_from_lastfm(
     playlist_name: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-) -> BuildResult:
+) -> tuple[list[Track], str, str, str]:
+    """Fetch tracks and build playlist metadata without touching Spotify."""
     user = lastfm.verify_user(username)
     display_name = user.get("name", username)
 
@@ -141,6 +141,33 @@ def create_playlist_from_lastfm(
     name = playlist_name or default_playlist_name(username, source, period, date_range)
     description = build_playlist_description(
         username, source, period, min_plays, date_range
+    )
+    return tracks, name, description, display_name
+
+
+def create_playlist_from_lastfm(
+    lastfm: LastFmClient,
+    destination: PlaylistDestination,
+    username: str,
+    *,
+    source: str = "top",
+    period: str = "overall",
+    limit: int = 50,
+    min_plays: int | None = None,
+    playlist_name: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> BuildResult:
+    tracks, name, description, display_name = prepare_playlist(
+        lastfm,
+        username,
+        source=source,
+        period=period,
+        limit=limit,
+        min_plays=min_plays,
+        playlist_name=playlist_name,
+        date_from=date_from,
+        date_to=date_to,
     )
 
     create_result = destination.create_playlist(name, description, tracks)

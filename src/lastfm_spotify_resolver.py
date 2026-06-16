@@ -175,7 +175,7 @@ class LastFmSpotifyResolver:
 
     def _fetch_spotify_id(self, lastfm_url: str) -> str | None:
         try:
-            response = self._session.get(lastfm_url, timeout=15)
+            response = self._session.get(lastfm_url, timeout=10)
             response.raise_for_status()
         except requests.RequestException:
             return None
