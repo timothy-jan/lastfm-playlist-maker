@@ -25,6 +25,7 @@ from ..spotify_playlist import add_tracks_to_playlist
 from ..track_cache import TrackCache
 from ..track_matcher import (
     fast_search_queries,
+    is_acceptable_match,
     pick_best_match,
     search_queries,
 )
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
     from spotipy.cache_handler import CacheHandler
 
 SCOPES = "playlist-modify-public playlist-modify-private"
-SEARCH_LIMIT = 10
+SEARCH_LIMIT = 20
 
 
 def _track_key(track: Track) -> tuple[str, str]:
@@ -122,15 +123,48 @@ class SpotifyDestination(PlaylistDestination):
                 return cached_uri
 
         ordered = search_queries(track) if relaxed else fast_search_queries(track)
+        candidates: dict[str, dict] = {}
 
         for query in ordered:
-            items = self._spotify_search(query)
-            uri = pick_best_match(track, items, relaxed=relaxed)
-            if uri:
-                self._track_cache.set_search(track.artist, track.title, uri)
-                return uri
+            for item in self._spotify_search(query):
+                uri = item.get("uri")
+                if uri:
+                    candidates[uri] = item
 
-        return None
+        uri = pick_best_match(track, list(candidates.values()), relaxed=relaxed)
+        if uri and not relaxed:
+            self._track_cache.set_search(track.artist, track.title, uri)
+        return uri
+
+    def _spotify_track_items(self, uris: list[str]) -> dict[str, dict | None]:
+        if not uris:
+            return {}
+
+        ids = [uri.rsplit(":", 1)[-1] for uri in uris]
+        items: dict[str, dict | None] = {}
+        for start in range(0, len(ids), 50):
+            chunk_ids = ids[start : start + 50]
+            chunk_uris = uris[start : start + 50]
+            try:
+                response = self.client.tracks(chunk_ids)
+            except SpotifyException:
+                for uri in chunk_uris:
+                    items[uri] = None
+                continue
+
+            for uri, item in zip(chunk_uris, response.get("tracks", [])):
+                items[uri] = item
+        return items
+
+    def _validate_lastfm_uri(self, track: Track, uri: str, item: dict | None) -> bool:
+        if not item:
+            return False
+        spotify_item = {
+            "name": item.get("name", ""),
+            "artists": item.get("artists", []),
+            "uri": uri,
+        }
+        return is_acceptable_match(track, spotify_item, relaxed=True)
 
     def _search_tracks_parallel(
         self, tracks: list[Track], *, relaxed: bool = False
@@ -184,7 +218,21 @@ class SpotifyDestination(PlaylistDestination):
                 uri = LastFmSpotifyResolver.to_spotify_uri(spotify_id)
                 resolved[index] = uri
                 uri_by_key[_track_key(track)] = uri
+
+        lastfm_validation: dict[str, dict | None] = {}
+        lastfm_uris = [uri for uri in resolved if uri]
+        if lastfm_uris:
+            lastfm_validation = self._spotify_track_items(lastfm_uris)
+
+        for index, track in enumerate(tracks):
+            uri = resolved[index]
+            if not uri:
+                continue
+            if self._validate_lastfm_uri(track, uri, lastfm_validation.get(uri)):
                 cache_writes.append((track.artist, track.title, uri))
+                continue
+            resolved[index] = None
+            uri_by_key.pop(_track_key(track), None)
 
         need_search: list[Track] = []
         need_search_indices: list[int] = []

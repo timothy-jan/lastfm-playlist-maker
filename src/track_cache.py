@@ -10,6 +10,7 @@ from .config import cache_dir
 
 CACHE_DIR = cache_dir()
 CACHE_DB = CACHE_DIR / "spotify_tracks.db"
+MATCHER_CACHE_VERSION = 2
 
 
 class TrackCache:
@@ -39,14 +40,39 @@ class TrackCache:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cache_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
         self.conn.commit()
         self._purge_negative_entries()
+        self._ensure_matcher_cache_version()
 
     def _purge_negative_entries(self) -> None:
         """Remove cached misses so improved matching can retry."""
         with self._db_lock:
             self.conn.execute("DELETE FROM lastfm_url WHERE spotify_id = ''")
             self.conn.execute("DELETE FROM track_search WHERE spotify_uri = ''")
+            self.conn.commit()
+
+    def _ensure_matcher_cache_version(self) -> None:
+        """Drop stale search cache when matching logic changes."""
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT value FROM cache_meta WHERE key = 'matcher_version'"
+            ).fetchone()
+            current = str(MATCHER_CACHE_VERSION)
+            if row and row[0] == current:
+                return
+            self.conn.execute("DELETE FROM track_search")
+            self.conn.execute(
+                "INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('matcher_version', ?)",
+                (current,),
+            )
             self.conn.commit()
 
     @classmethod
