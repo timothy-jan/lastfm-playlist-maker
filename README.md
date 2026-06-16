@@ -52,6 +52,8 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000), enter a Last.fm username, a
 
 ## Deploy (Render)
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/timothy-jan/lastfm-playlist-maker)
+
 This repo includes a [`render.yaml`](render.yaml) blueprint for free hosting on [Render](https://render.com).
 
 1. Push the repo to GitHub (already done if you cloned from there).
