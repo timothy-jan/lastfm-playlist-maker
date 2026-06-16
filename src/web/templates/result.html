@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Playlist created — Last.fm Playlist Maker{% endblock %}
+
+{% block content %}
+<section class="card result">
+  <div class="result-icon">✓</div>
+  <h2>Playlist created</h2>
+  <p class="result-subtitle">{{ result.playlist_name }}</p>
+
+  <div class="stats">
+    <div class="stat">
+      <span class="stat-value">{{ result.create_result.matched }}</span>
+      <span class="stat-label">Added to Spotify</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ result.create_result.total }}</span>
+      <span class="stat-label">From Last.fm</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ result.create_result.not_found|length }}</span>
+      <span class="stat-label">Not matched</span>
+    </div>
+  </div>
+
+  <a class="button button-primary button-large" href="{{ result.url }}" target="_blank" rel="noopener">
+    Open in Spotify
+  </a>
+
+  {% if result.create_result.not_found %}
+  <details class="not-found">
+    <summary>{{ result.create_result.not_found|length }} track(s) couldn't be matched</summary>
+    <ul class="track-list">
+      {% for track in result.create_result.not_found %}
+        <li>
+          <span class="track-title">{{ track.title }}</span>
+          <span class="track-artist">{{ track.artist }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
+  <a class="link-back" href="{{ url_for('index') }}">← Create another playlist</a>
+</section>
+{% endblock %}

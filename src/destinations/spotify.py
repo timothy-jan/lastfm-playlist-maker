@@ -1,0 +1,228 @@
+"""Spotify playlist destination."""
+
+from __future__ import annotations
+
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING
+
+import spotipy
+from spotipy.exceptions import SpotifyException
+from spotipy.oauth2 import SpotifyOAuth
+
+from ..config import (
+    SPOTIFY_SEARCH_WORKERS,
+    has_spotify_config,
+    spotify_client_id,
+    spotify_client_secret,
+    spotify_redirect_uri,
+)
+from ..destinations.base import PlaylistDestination
+from ..lastfm_spotify_resolver import LastFmSpotifyResolver
+from ..models import PlaylistCreateResult, Track
+from ..spotify_playlist import add_tracks_to_playlist
+from ..track_cache import TrackCache
+from ..track_matcher import pick_best_match, primary_search_query, search_queries
+
+if TYPE_CHECKING:
+    from spotipy.cache_handler import CacheHandler
+
+SCOPES = "playlist-modify-public playlist-modify-private"
+SEARCH_LIMIT = 10
+
+
+class SpotifyDestination(PlaylistDestination):
+    def __init__(
+        self,
+        *,
+        cache_handler: CacheHandler | None = None,
+        open_browser: bool = True,
+        lastfm_resolver: LastFmSpotifyResolver | None = None,
+        track_cache: TrackCache | None = None,
+    ):
+        self._cache_handler = cache_handler
+        self._open_browser = open_browser
+        self._track_cache = track_cache or TrackCache.shared()
+        self._lastfm_resolver = lastfm_resolver or LastFmSpotifyResolver(self._track_cache)
+        self._client: spotipy.Spotify | None = None
+        self._auth: SpotifyOAuth | None = None
+        self._thread_local = threading.local()
+
+    @property
+    def auth(self) -> SpotifyOAuth:
+        if self._auth is None:
+            self._auth = SpotifyOAuth(
+                client_id=spotify_client_id(),
+                client_secret=spotify_client_secret(),
+                redirect_uri=spotify_redirect_uri(),
+                scope=SCOPES,
+                cache_handler=self._cache_handler,
+                open_browser=self._open_browser,
+                show_dialog=True,
+            )
+        return self._auth
+
+    @property
+    def client(self) -> spotipy.Spotify:
+        if self._client is None:
+            self._client = spotipy.Spotify(auth_manager=self.auth)
+        return self._client
+
+    def _thread_client(self) -> spotipy.Spotify:
+        client = getattr(self._thread_local, "client", None)
+        if client is None:
+            client = spotipy.Spotify(auth_manager=self.auth)
+            self._thread_local.client = client
+        return client
+
+    def is_authenticated(self) -> bool:
+        if not has_spotify_config():
+            return False
+        return self.auth.get_cached_token() is not None
+
+    def get_authorize_url(self) -> str:
+        return self.auth.get_authorize_url()
+
+    def complete_auth(self, code: str) -> None:
+        self.auth.get_access_token(code, as_dict=True)
+
+    def _access_token(self) -> str:
+        token_info = self.auth.get_cached_token()
+        if not token_info or "access_token" not in token_info:
+            raise SpotifyException(401, -1, "Spotify session expired. Connect again.")
+        return token_info["access_token"]
+
+    def _spotify_search(self, query: str) -> list[dict]:
+        for attempt in range(3):
+            try:
+                result = self._thread_client().search(
+                    q=query, type="track", limit=SEARCH_LIMIT
+                )
+                return result.get("tracks", {}).get("items", [])
+            except SpotifyException as exc:
+                if exc.http_status == 429 and attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                return []
+        return []
+
+    def _search_track(self, track: Track, *, relaxed: bool = False) -> str | None:
+        if not relaxed:
+            hit, cached_uri = self._track_cache.get_search(track.artist, track.title)
+            if hit and cached_uri:
+                return cached_uri
+
+        queries = search_queries(track)
+        primary = primary_search_query(track)
+        ordered = [primary] + [query for query in queries if query != primary]
+
+        for query in ordered:
+            items = self._spotify_search(query)
+            uri = pick_best_match(track, items, relaxed=relaxed)
+            if uri:
+                self._track_cache.set_search(track.artist, track.title, uri)
+                return uri
+
+        return None
+
+    def _search_tracks_parallel(
+        self, tracks: list[Track], *, relaxed: bool = False
+    ) -> dict[int, str | None]:
+        if not tracks:
+            return {}
+
+        results: dict[int, str | None] = {}
+
+        if len(tracks) == 1:
+            results[0] = self._search_track(tracks[0], relaxed=relaxed)
+            return results
+
+        with ThreadPoolExecutor(max_workers=SPOTIFY_SEARCH_WORKERS) as executor:
+            futures = {
+                executor.submit(self._search_track, track, relaxed=relaxed): index
+                for index, track in enumerate(tracks)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    results[index] = future.result()
+                except Exception:
+                    results[index] = None
+        return results
+
+    def _resolve_all_tracks(self, tracks: list[Track]) -> tuple[list[str], list[Track]]:
+        if not tracks:
+            return [], []
+
+        url_by_index: list[str] = [
+            self._lastfm_resolver.track_url(
+                lastfm_url=track.lastfm_url,
+                artist=track.artist,
+                title=track.title,
+            )
+            for track in tracks
+        ]
+
+        lastfm_ids = self._lastfm_resolver.resolve_many(
+            [(track.lastfm_url, track.artist, track.title) for track in tracks]
+        )
+
+        lastfm_uris: dict[int, str] = {}
+        need_search: list[tuple[int, Track]] = []
+        for index, track in enumerate(tracks):
+            spotify_id = lastfm_ids.get(url_by_index[index])
+            if spotify_id:
+                lastfm_uris[index] = LastFmSpotifyResolver.to_spotify_uri(spotify_id)
+            else:
+                need_search.append((index, track))
+
+        search_uris = self._search_tracks_parallel(
+            [track for _, track in need_search], relaxed=False
+        )
+        search_by_index = {
+            original_index: search_uris.get(position)
+            for position, (original_index, _) in enumerate(need_search)
+        }
+
+        resolved: list[str | None] = []
+        for index, track in enumerate(tracks):
+            resolved.append(lastfm_uris.get(index) or search_by_index.get(index))
+
+        retry_indices = [index for index, uri in enumerate(resolved) if not uri]
+        retry_tracks = [tracks[index] for index in retry_indices]
+        if retry_tracks:
+            retry_uris = self._search_tracks_parallel(retry_tracks, relaxed=True)
+            for position, index in enumerate(retry_indices):
+                retry_uri = retry_uris.get(position)
+                if retry_uri:
+                    resolved[index] = retry_uri
+                    track = tracks[index]
+                    self._track_cache.set_search(track.artist, track.title, retry_uri)
+
+        uris = [uri for uri in resolved if uri]
+        not_found = [track for uri, track in zip(resolved, tracks) if not uri]
+        return uris, not_found
+
+    def create_playlist(self, name: str, description: str, tracks: list[Track]) -> PlaylistCreateResult:
+        uris, not_found = self._resolve_all_tracks(tracks)
+        if not uris:
+            raise RuntimeError(
+                "Could not match any tracks on Spotify. "
+                "Try a smaller list or check that Last.fm track pages include Spotify links."
+            )
+
+        playlist = self.client.current_user_playlist_create(
+            name, public=True, description=description
+        )
+        playlist_id = playlist["id"]
+        playlist_url = playlist["external_urls"]["spotify"]
+
+        add_tracks_to_playlist(self._access_token(), playlist_id, uris)
+
+        return PlaylistCreateResult(
+            url=playlist_url,
+            matched=len(uris),
+            total=len(tracks),
+            not_found=not_found,
+        )

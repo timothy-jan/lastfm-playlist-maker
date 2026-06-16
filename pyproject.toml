@@ -1,0 +1,24 @@
+[project]
+name = "lastfm-playlist-maker"
+version = "0.1.0"
+description = "Create Spotify playlists from Last.fm listening stats"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1.0",
+    "flask>=3.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "spotipy>=2.23.0",
+]
+
+[project.scripts]
+lastfm-playlist = "src.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

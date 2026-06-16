@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Last.fm Playlist Maker{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <a class="brand brand-link" href="{{ url_for('index') }}">
+        <span class="brand-icon">♫</span>
+        <div>
+          <h1>Last.fm Playlist Maker</h1>
+          <p>Turn your scrobbles into a Spotify playlist</p>
+        </div>
+      </a>
+      <div class="spotify-status {% if spotify_connected %}connected{% endif %}">
+        {% if spotify_connected %}
+          <span class="dot"></span> Spotify connected
+          <a class="status-link" href="{{ url_for('logout') }}">Disconnect</a>
+        {% elif spotify_configured %}
+          <a class="button button-secondary" href="{{ url_for('login') }}">Connect Spotify</a>
+        {% else %}
+          <span>Spotify not configured</span>
+        {% endif %}
+      </div>
+    </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="messages">
+          {% for category, message in messages %}
+            <div class="message message-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <div id="loading-screen" class="loading-screen" hidden aria-live="polite" aria-busy="true">
+    <div class="loading-card">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <h2 id="loading-title">Working…</h2>
+      <p id="loading-message">This may take a moment.</p>
+      <p id="loading-detail" class="loading-detail"></p>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='loading.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

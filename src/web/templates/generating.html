@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Generating playlist — Last.fm Playlist Maker{% endblock %}
+
+{% block content %}
+<section class="card generating-placeholder">
+  <p>Starting playlist generation…</p>
+</section>
+
+<form id="resume-form" method="post" action="{{ url_for('create_playlist_resume_post') }}" hidden></form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  showLoading("create");
+  createPlaylist(
+    document.getElementById("resume-form").action,
+    new FormData(document.getElementById("resume-form"))
+  );
+</script>
+{% endblock %}

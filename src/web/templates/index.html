@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if not spotify_configured %}
+<section class="card setup-card">
+  <h2>Connect Spotify</h2>
+  <p>Add your Spotify app credentials to <code>.env</code> to enable playlist creation.</p>
+  <ol class="setup-steps">
+    <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify Developer Dashboard</a></li>
+    <li>Create an app (or open an existing one)</li>
+    <li>Under <strong>Redirect URIs</strong>, add:<br><code class="setup-uri">http://127.0.0.1:5000/callback</code></li>
+    <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> into your <code>.env</code> file</li>
+    <li>Restart the app, then click <strong>Connect Spotify</strong></li>
+    <li>In Development Mode, add your Spotify email under <strong>User Management</strong> (app owner needs Premium)</li>
+  </ol>
+</section>
+{% endif %}
+
+<section class="card">
+  <form method="post" action="{{ url_for('create_playlist') }}" class="form" id="playlist-form">
+    <div class="field">
+      <label for="username">Last.fm username</label>
+      <input
+        type="text"
+        id="username"
+        name="username"
+        placeholder="e.g. yourusername"
+        value="{{ form.username if form else '' }}"
+        required
+        autocomplete="username"
+      >
+    </div>
+
+    <div class="field">
+      <label>Track source</label>
+      <div class="radio-group">
+        <label class="radio">
+          <input type="radio" name="source" value="top" {% if not form or form.source == 'top' %}checked{% endif %}>
+          Top tracks
+        </label>
+        <label class="radio">
+          <input type="radio" name="source" value="loved" {% if form and form.source == 'loved' %}checked{% endif %}>
+          Loved tracks
+        </label>
+        <label class="radio">
+          <input type="radio" name="source" value="both" {% if form and form.source == 'both' %}checked{% endif %}>
+          Top + loved
+        </label>
+      </div>
+    </div>
+
+    <div class="field-row" id="top-filters">
+      <div class="field field-period">
+        <label for="period">When do you want music from?</label>
+        <select id="period" name="period">
+          {% for key, label in periods.items() %}
+            <option value="{{ key }}" {% if (form and form.period == key) or (not form and key == 'overall') %}selected{% endif %}>
+              {{ label }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="min_plays">Min plays</label>
+        <input
+          type="number"
+          id="min_plays"
+          name="min_plays"
+          min="1"
+          placeholder="Any"
+          value="{{ form.min_plays if form else '' }}"
+        >
+      </div>
+
+      <div class="field">
+        <label for="limit">Max tracks</label>
+        <input
+          type="number"
+          id="limit"
+          name="limit"
+          min="1"
+          max="10000"
+          value="{{ form.limit if form else '50' }}"
+        >
+      </div>
+    </div>
+
+    <div
+      id="custom-range-panel"
+      class="custom-range"
+      {% if not form or form.period != 'custom' %}hidden{% endif %}
+    >
+      <p class="custom-range-lead">Tell us the stretch of listening you're curious about.</p>
+
+      <div class="date-quick-picks" role="group" aria-label="Quick date ranges">
+        <button type="button" class="date-chip" data-preset="7">Last week</button>
+        <button type="button" class="date-chip" data-preset="30">Last 30 days</button>
+        <button type="button" class="date-chip" data-preset="90">Last 3 months</button>
+        <button type="button" class="date-chip" data-preset="year">This year so far</button>
+      </div>
+
+      <div class="date-fields">
+        <div class="date-field">
+          <label for="date_from">Starting from</label>
+          <input
+            type="date"
+            id="date_from"
+            name="date_from"
+            max="{{ today }}"
+            value="{{ form.date_from if form and form.date_from else default_date_from }}"
+          >
+        </div>
+        <span class="date-arrow" aria-hidden="true">→</span>
+        <div class="date-field">
+          <label for="date_to">Through</label>
+          <input
+            type="date"
+            id="date_to"
+            name="date_to"
+            max="{{ today }}"
+            value="{{ form.date_to if form and form.date_to else default_date_to }}"
+          >
+        </div>
+      </div>
+
+      <p id="date-range-summary" class="date-range-summary" aria-live="polite"></p>
+      <p class="custom-range-note">Every scrobble in that window counts toward your top tracks.</p>
+    </div>
+
+    <div class="field">
+      <label for="name">Playlist name <span class="optional">(optional)</span></label>
+      <input
+        type="text"
+        id="name"
+        name="name"
+        placeholder="Auto-generated if left blank"
+        value="{{ form.name if form else '' }}"
+      >
+    </div>
+
+    <div class="actions">
+      <button type="submit" id="preview-btn" formaction="{{ url_for('preview') }}" class="button button-secondary">
+        Preview tracks
+      </button>
+      <button type="submit" id="create-btn" class="button button-primary">
+        Create Spotify playlist
+      </button>
+    </div>
+  </form>
+</section>
+
+{% if preview %}
+<section class="card preview">
+  <h2>Preview for {{ preview.username }}{% if preview.demo %} <span class="demo-badge">demo</span>{% endif %}</h2>
+  <p class="preview-count">{{ preview.count }} track{{ 's' if preview.count != 1 else '' }} matched your filters</p>
+  <ul class="track-list">
+    {% for track in preview.tracks %}
+      <li>
+        <span class="track-title">{{ track.title }}</span>
+        <span class="track-artist">{{ track.artist }}</span>
+        {% if track.playcount %}
+          <span class="track-meta">{{ track.playcount }} plays</span>
+        {% elif track.loved %}
+          <span class="track-meta loved">♥ loved</span>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+  {% if preview.count > preview.tracks|length %}
+    <p class="preview-more">…and {{ preview.count - preview.tracks|length }} more</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='date-range.js') }}"></script>
+<script>
+  const sourceInputs = document.querySelectorAll('input[name="source"]');
+  const topFilters = document.getElementById('top-filters');
+  const periodSelect = document.getElementById('period');
+  const customPanel = document.getElementById('custom-range-panel');
+
+  function updateFilters() {
+    const source = document.querySelector('input[name="source"]:checked')?.value;
+    const showTop = source === 'top' || source === 'both';
+    topFilters.style.display = showTop ? 'grid' : 'none';
+    customPanel.hidden = !showTop || periodSelect.value !== 'custom';
+  }
+
+  sourceInputs.forEach((input) => input.addEventListener('change', updateFilters));
+  periodSelect.addEventListener('change', updateFilters);
+  updateFilters();
+</script>
+{% endblock %}
