@@ -23,8 +23,18 @@ def _http_session() -> requests.Session:
     return _session
 
 
-def add_tracks_to_playlist(access_token: str, playlist_id: str, uris: list[str]) -> None:
-    """Add track URIs to a playlist, validating each API response."""
+def add_tracks_to_playlist(
+    access_token: str,
+    playlist_id: str,
+    uris: list[str],
+    *,
+    append: bool = True,
+) -> None:
+    """Add track URIs to a playlist.
+
+    When append=True (default), always POST so tracks are added to the end.
+    When append=False, the first batch PUT-replaces (for single-shot small playlists).
+    """
     if not uris:
         return
 
@@ -37,11 +47,12 @@ def add_tracks_to_playlist(access_token: str, playlist_id: str, uris: list[str])
     for index in range(0, len(uris), BATCH_SIZE):
         batch = uris[index : index + BATCH_SIZE]
         url = f"{SPOTIFY_API}/playlists/{playlist_id}/items"
+        payload = {"uris": batch}
 
-        if index == 0:
-            response = session.put(url, headers=headers, json={"uris": batch}, timeout=30)
+        if append or index > 0:
+            response = session.post(url, headers=headers, json=payload, timeout=30)
         else:
-            response = session.post(url, headers=headers, json={"uris": batch}, timeout=30)
+            response = session.put(url, headers=headers, json=payload, timeout=30)
 
         if response.status_code in (200, 201):
             continue

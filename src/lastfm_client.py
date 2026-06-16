@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import requests
 
 from .config import LASTFM_PAGE_SIZE
@@ -9,11 +11,28 @@ from .date_range import DateRange, date_range_to_unix
 from .models import MAX_TRACK_LIMIT, Track
 
 BASE_URL = "https://ws.audioscrobbler.com/2.0/"
-PAGE_SIZE = LASTFM_PAGE_SIZE
+PAGE_SIZE = min(LASTFM_PAGE_SIZE, 200)
 
 
 class LastFmError(Exception):
     pass
+
+
+def _as_track_list(value) -> list:
+    if not value:
+        return []
+    if isinstance(value, dict):
+        return [value]
+    return value
+
+
+def _parse_attr_int(value, default: int | None = None) -> int | None:
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class LastFmClient:
@@ -28,14 +47,32 @@ class LastFmClient:
             "format": "json",
             **params,
         }
-        response = self.session.get(BASE_URL, params=payload, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        if "error" in data:
-            code = data.get("error")
-            message = data.get("message", "Unknown Last.fm error")
-            raise LastFmError(f"Last.fm error {code}: {message}")
-        return data
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = self.session.get(BASE_URL, params=payload, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                if "error" in data:
+                    code = data.get("error")
+                    message = data.get("message", "Unknown Last.fm error")
+                    raise LastFmError(f"Last.fm error {code}: {message}")
+                return data
+            except requests.HTTPError as exc:
+                last_error = exc
+                status = exc.response.status_code if exc.response is not None else 0
+                if status in (429, 500, 502, 503, 504) and attempt < 2:
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                raise LastFmError(
+                    f"Last.fm request failed ({status}). Try again in a moment."
+                ) from exc
+            except requests.RequestException as exc:
+                raise LastFmError(f"Could not reach Last.fm: {exc}") from exc
+
+        if last_error:
+            raise LastFmError("Last.fm request failed. Try again in a moment.") from last_error
+        raise LastFmError("Last.fm request failed. Try again in a moment.")
 
     def verify_user(self, username: str) -> dict:
         """Return basic profile info; raises if user does not exist."""
@@ -53,17 +90,33 @@ class LastFmClient:
         limit = min(limit, MAX_TRACK_LIMIT)
         tracks: list[Track] = []
         page = 1
+        total_pages: int | None = None
 
         while len(tracks) < limit:
+            if total_pages is not None and page > total_pages:
+                break
+
             remaining = limit - len(tracks)
-            data = self._get(
-                "user.getTopTracks",
-                user=username,
-                period=period,
-                limit=min(PAGE_SIZE, remaining),
-                page=page,
-            )
-            batch = data.get("toptracks", {}).get("track", [])
+            batch_limit = min(PAGE_SIZE, remaining)
+            try:
+                data = self._get(
+                    "user.getTopTracks",
+                    user=username,
+                    period=period,
+                    limit=batch_limit,
+                    page=page,
+                )
+            except LastFmError:
+                if tracks and page > 1:
+                    break
+                raise
+
+            toptracks = data.get("toptracks", {})
+            attrs = toptracks.get("@attr", {})
+            if total_pages is None:
+                total_pages = _parse_attr_int(attrs.get("totalPages"))
+
+            batch = _as_track_list(toptracks.get("track"))
             if not batch:
                 break
 
@@ -84,7 +137,7 @@ class LastFmClient:
                 if len(tracks) >= limit:
                     break
 
-            if len(batch) < PAGE_SIZE:
+            if len(batch) < batch_limit:
                 break
             page += 1
 
@@ -107,19 +160,23 @@ class LastFmClient:
         page_size = min(PAGE_SIZE, 200)
 
         while True:
-            data = self._get(
-                "user.getRecentTracks",
-                user=username,
-                limit=page_size,
-                page=page,
-                **{"from": from_ts, "to": to_ts},
-            )
+            try:
+                data = self._get(
+                    "user.getRecentTracks",
+                    user=username,
+                    limit=page_size,
+                    page=page,
+                    **{"from": from_ts, "to": to_ts},
+                )
+            except LastFmError:
+                if counts and page > 1:
+                    break
+                raise
+
             recent = data.get("recenttracks", {})
-            batch = recent.get("track", [])
+            batch = _as_track_list(recent.get("track"))
             if not batch:
                 break
-            if isinstance(batch, dict):
-                batch = [batch]
 
             for item in batch:
                 attrs = item.get("@attr", {})
@@ -167,16 +224,32 @@ class LastFmClient:
         limit = min(limit, MAX_TRACK_LIMIT)
         tracks: list[Track] = []
         page = 1
+        total_pages: int | None = None
 
         while len(tracks) < limit:
+            if total_pages is not None and page > total_pages:
+                break
+
             remaining = limit - len(tracks)
-            data = self._get(
-                "user.getLovedTracks",
-                user=username,
-                limit=min(PAGE_SIZE, remaining),
-                page=page,
-            )
-            batch = data.get("lovedtracks", {}).get("track", [])
+            batch_limit = min(PAGE_SIZE, remaining)
+            try:
+                data = self._get(
+                    "user.getLovedTracks",
+                    user=username,
+                    limit=batch_limit,
+                    page=page,
+                )
+            except LastFmError:
+                if tracks and page > 1:
+                    break
+                raise
+
+            lovedtracks = data.get("lovedtracks", {})
+            attrs = lovedtracks.get("@attr", {})
+            if total_pages is None:
+                total_pages = _parse_attr_int(attrs.get("totalPages"))
+
+            batch = _as_track_list(lovedtracks.get("track"))
             if not batch:
                 break
 
@@ -194,7 +267,7 @@ class LastFmClient:
                 if len(tracks) >= limit:
                     break
 
-            if len(batch) < PAGE_SIZE:
+            if len(batch) < batch_limit:
                 break
             page += 1
 

@@ -33,48 +33,89 @@
     document.body.classList.add("is-loading");
   }
 
-  function updateProgress(processed, total) {
+  function updateProgress(processed, total, matched) {
     if (!detail || !total) return;
     const pct = Math.min(100, Math.round((processed / total) * 100));
-    detail.textContent = `Processed ${processed.toLocaleString()} of ${total.toLocaleString()} tracks (${pct}%)…`;
+    const matchedText =
+      typeof matched === "number" ? ` · ${matched.toLocaleString()} matched` : "";
+    detail.textContent = `Processed ${processed.toLocaleString()} of ${total.toLocaleString()} tracks (${pct}%)${matchedText}…`;
   }
 
   window.showLoading = showLoading;
   window.hideLoading = hideLoading;
   window.createPlaylist = createPlaylist;
 
-  async function processChunks(start) {
-    const { tracks, chunk_size: chunkSize, playlist_id: playlistId, total } = start;
-    const size = chunkSize || 120;
+  async function postJson(url, body) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || "Request failed.");
+    }
+    return data;
+  }
 
-    for (let offset = 0; offset < tracks.length; offset += size) {
-      updateProgress(offset, total);
-      const slice = tracks.slice(offset, offset + size);
-      const response = await fetch("/create/chunk", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Requested-With": "XMLHttpRequest",
-        },
-        body: JSON.stringify({
-          playlist_id: playlistId,
-          tracks: slice,
-          offset,
-        }),
-      });
-      const data = await response.json();
-
-      if (!data.success) {
-        throw new Error(data.error || "Chunk processing failed.");
-      }
-
-      updateProgress(data.processed || offset + slice.length, total);
-
-      if (data.done && data.redirect) {
-        window.location.href = data.redirect;
-        return;
+  async function processChunkWithRetry(body, attempts = 2) {
+    let lastError;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        return await postJson("/create/chunk", body);
+      } catch (error) {
+        lastError = error;
+        if (attempt + 1 < attempts) {
+          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
       }
     }
+    throw lastError;
+  }
+
+  async function processChunks(start) {
+    const {
+      tracks,
+      chunk_size: chunkSize,
+      playlist_id: playlistId,
+      playlist_url: playlistUrl,
+      playlist_name: playlistName,
+      total,
+    } = start;
+    const size = chunkSize || 120;
+    let matched = 0;
+    const notFound = [];
+
+    for (let offset = 0; offset < tracks.length; offset += size) {
+      updateProgress(offset, total, matched);
+      const slice = tracks.slice(offset, offset + size);
+      const data = await processChunkWithRetry({
+        playlist_id: playlistId,
+        tracks: slice,
+        offset,
+      });
+
+      matched += data.matched || 0;
+      if (Array.isArray(data.not_found)) {
+        notFound.push(...data.not_found);
+      }
+
+      updateProgress(data.processed || offset + slice.length, total, matched);
+    }
+
+    const finish = await postJson("/create/finish", {
+      playlist_id: playlistId,
+      playlist_url: playlistUrl,
+      playlist_name: playlistName,
+      matched,
+      total,
+      not_found: notFound,
+    });
+
+    window.location.href = finish.redirect;
   }
 
   async function createPlaylist(url, formData) {
@@ -89,7 +130,6 @@
 
       if (data.success && data.chunked) {
         await processChunks(data);
-        hideLoading();
         return;
       }
 

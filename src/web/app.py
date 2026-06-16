@@ -191,48 +191,49 @@ def create_app() -> Flask:
         except Exception as exc:
             return jsonify({"success": False, "error": f"Something went wrong: {exc}"}), 400
 
-        job["matched"] += len(uris)
-        job["not_found"].extend(
-            {"artist": track.artist, "title": track.title} for track in not_found
-        )
-        session[CHUNK_JOB_KEY] = job
-
-        processed = int(payload.get("offset", 0)) + len(tracks)
-        done = processed >= job["total"]
-
-        if done:
-            if job["matched"] == 0:
-                session.pop(CHUNK_JOB_KEY, None)
-                return jsonify(
-                    {"success": False, "error": "Could not match any tracks on Spotify."}
-                ), 400
-
-            session[LAST_RESULT_KEY] = {
-                "url": job["playlist_url"],
-                "playlist_name": job["playlist_name"],
-                "matched": job["matched"],
-                "total": job["total"],
-                "not_found": job["not_found"],
-            }
-            session.pop(CHUNK_JOB_KEY, None)
-            return jsonify(
-                {
-                    "success": True,
-                    "done": True,
-                    "redirect": url_for("show_result"),
-                    "processed": processed,
-                    "total": job["total"],
-                }
-            )
+        offset = int(payload.get("offset", 0))
+        processed = offset + len(tracks)
 
         return jsonify(
             {
                 "success": True,
-                "done": False,
+                "matched": len(uris),
+                "not_found": [
+                    {"artist": track.artist, "title": track.title} for track in not_found
+                ],
                 "processed": processed,
                 "total": job["total"],
             }
         )
+
+    @app.post("/create/finish")
+    def create_playlist_finish():
+        if not _wants_json():
+            return redirect(url_for("index"))
+
+        job = session.get(CHUNK_JOB_KEY)
+        payload = request.get_json(silent=True) or {}
+
+        if not job or payload.get("playlist_id") != job.get("playlist_id"):
+            return jsonify({"success": False, "error": "Session expired. Please try again."}), 400
+
+        matched = int(payload.get("matched", 0))
+        total = int(payload.get("total", job.get("total", 0)))
+        if matched == 0:
+            session.pop(CHUNK_JOB_KEY, None)
+            return jsonify(
+                {"success": False, "error": "Could not match any tracks on Spotify."}
+            ), 400
+
+        session[LAST_RESULT_KEY] = {
+            "url": job["playlist_url"],
+            "playlist_name": job["playlist_name"],
+            "matched": matched,
+            "total": total,
+            "not_found": payload.get("not_found", []),
+        }
+        session.pop(CHUNK_JOB_KEY, None)
+        return jsonify({"success": True, "redirect": url_for("show_result")})
 
     @app.get("/result")
     def show_result():
@@ -416,8 +417,6 @@ def _start_chunked_playlist(spotify, tracks: list[Track], name: str, description
         "playlist_id": playlist_id,
         "playlist_url": playlist_url,
         "playlist_name": name,
-        "matched": 0,
-        "not_found": [],
         "total": len(tracks),
     }
 
@@ -428,6 +427,8 @@ def _start_chunked_playlist(spotify, tracks: list[Track], name: str, description
                 "chunked": True,
                 "chunk_size": PLAYLIST_CHUNK_SIZE,
                 "playlist_id": playlist_id,
+                "playlist_url": playlist_url,
+                "playlist_name": name,
                 "total": len(tracks),
                 "tracks": [_track_to_dict(track) for track in tracks],
             }

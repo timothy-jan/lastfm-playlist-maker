@@ -272,7 +272,9 @@ class SpotifyDestination(PlaylistDestination):
 
     def append_tracks(self, playlist_id: str, uris: list[str]) -> None:
         if uris:
-            add_tracks_to_playlist(self._access_token(), playlist_id, uris)
+            add_tracks_to_playlist(
+                self._access_token(), playlist_id, uris, append=True
+            )
 
     def create_playlist(self, name: str, description: str, tracks: list[Track]) -> PlaylistCreateResult:
         uris, not_found = self._resolve_all_tracks(tracks)
