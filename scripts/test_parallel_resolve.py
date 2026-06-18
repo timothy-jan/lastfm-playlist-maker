@@ -1,39 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Verify the threaded resolve pipeline returns matches without a request context.
-
-Reproduces the conditions of the live bug (searches running in worker threads)
-using mocked Spotify responses, so no network or auth is required.
-"""
+"""Verify the resolve pipeline matches tracks via mocked Spotify search."""
 
 import sys
 from unittest.mock import patch
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from src.destinations.spotify import SpotifyDestination
 from src.models import Track
 from src.track_cache import TrackCache
-
-
-class _NoopCache:
-    def get_search(self, artist, title):
-        return False, None
-
-    def set_search(self, artist, title, uri):
-        pass
-
-    def get_search_many(self, pairs):
-        return {pair: (False, None) for pair in pairs}
-
-    def set_search_many(self, entries):
-        pass
-
-    def get_lastfm_many(self, urls):
-        return {url: (False, None) for url in urls}
-
-    def set_lastfm_many(self, successes):
-        pass
-
+from src.track_resolver import TrackResolver
 
 CATALOG = {
     ("Radiohead", "Creep"): {
@@ -53,44 +28,39 @@ CATALOG = {
     },
 }
 
-TRACKS = [Track(artist, title) for (artist, title) in CATALOG]
+
+class _NoopCache:
+    def get_search_many(self, pairs):
+        return {pair: (False, None) for pair in pairs}
+
+    def set_search_many(self, entries):
+        pass
 
 
-def fake_search(self, query):
+def fake_search(query: str) -> list[dict]:
     q = query.casefold()
     for (artist, title), item in CATALOG.items():
         if title.casefold() in q and artist.casefold() in q:
-            return [item]
-    for (artist, title), item in CATALOG.items():
-        if title.casefold() in q:
             return [item]
     return []
 
 
 def main():
-    cache = _NoopCache()
-    dest = SpotifyDestination(open_browser=False, track_cache=cache)
-    # Pretend we already have a usable token (captured in the request thread).
-    dest._worker_token = "fake-token"
+    resolver = TrackResolver(
+        cache=_NoopCache(),  # type: ignore[arg-type]
+        search=fake_search,
+    )
+    tracks = [Track(a, t) for a, t in CATALOG]
+    with patch.object(resolver._lastfm, "resolve_urls", return_value={}):
+        uris, not_found = resolver.resolve(tracks)
 
-    with patch.object(SpotifyDestination, "_spotify_search", fake_search), patch.object(
-        SpotifyDestination, "_spotify_track_items", lambda self, uris: {}
-    ), patch.object(
-        dest._lastfm_resolver,
-        "resolve_many",
-        lambda items: {},
-    ):
-        uris, not_found = dest._resolve_all_tracks(TRACKS)
-
-    print(f"matched {len(uris)}/{len(TRACKS)}")
+    print(f"matched {len(uris)}/{len(tracks)}")
     for track in not_found:
         print(f"  MISS: {track.artist} — {track.title}")
 
-    if len(uris) != len(TRACKS):
-        print("FAIL: threaded resolve did not match every track")
+    if len(uris) != len(tracks):
         sys.exit(1)
-
-    print("OK: threaded resolve matched all tracks")
+    print("OK")
 
 
 if __name__ == "__main__":

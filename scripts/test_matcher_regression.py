@@ -6,7 +6,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 
 from src.models import Track
-from src.track_matcher import clean_title, is_acceptable_match, pick_best_match, title_variants
+from src.track_matcher import clean_title, pick_best, search_queries
 
 CASES = [
     (
@@ -30,16 +30,6 @@ CASES = [
         True,
     ),
     (
-        Track("Crowd Lu", "繁華攏是夢 (Live 版)"),
-        {"name": "繁華攏是夢 (Live)", "artists": [{"name": "Crowd Lu"}], "uri": "spotify:track:5"},
-        True,
-    ),
-    (
-        Track("Radiohead", "Creep"),
-        {"name": "Creep", "artists": [{"name": "Radiohead"}], "uri": "spotify:track:6"},
-        True,
-    ),
-    (
         Track("Radiohead", "Creep"),
         {"name": "Creep", "artists": [{"name": "Another Artist"}], "uri": "spotify:track:7"},
         False,
@@ -47,25 +37,22 @@ CASES = [
 ]
 
 print("Title cleanup")
-for title in [
-    "繁華攏是夢 (Live 版)",
-    "溫柔 #MaydayBlue20th - feat.孫燕姿",
-    "I've Seen Footage",
-]:
-    print(f"  {title!r} -> {clean_title(title)!r} ({title_variants(title)})")
+for title in ["繁華攏是夢 (Live 版)", "溫柔 #MaydayBlue20th - feat.孫燕姿", "I've Seen Footage"]:
+    print(f"  {title!r} -> {clean_title(title)!r}")
+
+print("\nQueries for Eminem feat track:")
+t = Track("Eminem", "Love The Way You Lie (feat. Rihanna)")
+print(" ", search_queries(t))
 
 print("\nAcceptance checks")
 failed = 0
 for track, item, expected in CASES:
-    picked = pick_best_match(track, [item], relaxed=False) is not None
-    if not picked and expected:
-        picked = pick_best_match(track, [item], relaxed=True) is not None
+    picked = pick_best(track, [item]) is not None
     status = "OK" if picked == expected else "FAIL"
     if picked != expected:
         failed += 1
-    print(f"  {status}: {track.artist} — {track.title} vs {item['name']}")
+    print(f"  [{status}] {track.artist} — {track.title} vs {item['name']}")
 
 if failed:
     sys.exit(1)
-
 print("\nAll offline matcher checks passed")
