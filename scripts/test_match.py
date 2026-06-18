@@ -1,20 +1,21 @@
-import requests
-import re
+# -*- coding: utf-8 -*-
+"""Quick offline checks for title cleanup and match acceptance."""
 
-SPOTIFY_TRACK_RE = re.compile(
-    r"(?:open\.spotify\.com/track/|spotify:track:)([a-zA-Z0-9]{22})"
-)
+import sys
 
-cases = [
-    ("Death Grips", "I've Seen Footage", "https://www.last.fm/music/Death+Grips/_/I%27ve+Seen+Footage"),
-    ("No Party For Cao Dong", "但", None),
-    ("Mayday", "溫柔 #MaydayBlue20th - feat.孫燕姿", None),
-]
+sys.stdout.reconfigure(encoding="utf-8")
 
-for artist, title, url in cases:
-    if not url:
-        from urllib.parse import quote
-        url = f"https://www.last.fm/music/{quote(artist)}/_/{quote(title)}"
-    r = requests.get(url, headers={"User-Agent": "test"}, timeout=15)
-    ids = SPOTIFY_TRACK_RE.findall(r.text)
-    print(repr(title), "status", r.status_code, "ids", len(ids))
+from src.models import Track
+from src.spotify_match import accepts, clean_title, primary_artist
+
+assert clean_title("Love The Way You Lie (feat. Rihanna)") == "Love The Way You Lie"
+assert clean_title("溫柔 #MaydayBlue20th - feat.孫燕姿") == "溫柔"
+assert primary_artist("Eminem feat. Rihanna") == "Eminem"
+
+track = Track("Radiohead", "Creep")
+good = {"name": "Creep", "artists": [{"name": "Radiohead"}], "uri": "spotify:track:1"}
+bad = {"name": "Get Got", "artists": [{"name": "Death Grips"}], "uri": "spotify:track:2"}
+
+assert accepts(track, good)
+assert not accepts(track, bad)
+print("OK")

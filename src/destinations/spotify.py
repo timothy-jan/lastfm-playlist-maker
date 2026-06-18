@@ -1,9 +1,7 @@
-"""Spotify playlist destination."""
+"""Spotify: login, search, create playlist."""
 
 from __future__ import annotations
 
-import threading
-import time
 from typing import TYPE_CHECKING
 
 import spotipy
@@ -18,9 +16,8 @@ from ..config import (
 )
 from ..destinations.base import PlaylistDestination
 from ..models import PlaylistCreateResult, Track
+from ..spotify_match import resolve_tracks
 from ..spotify_playlist import add_tracks_to_playlist
-from ..track_cache import TrackCache
-from ..track_resolver import TrackResolver
 
 if TYPE_CHECKING:
     from spotipy.cache_handler import CacheHandler
@@ -34,16 +31,11 @@ class SpotifyDestination(PlaylistDestination):
         *,
         cache_handler: CacheHandler | None = None,
         open_browser: bool = True,
-        track_cache: TrackCache | None = None,
     ):
         self._cache_handler = cache_handler
         self._open_browser = open_browser
-        self._track_cache = track_cache or TrackCache.shared()
         self._client: spotipy.Spotify | None = None
         self._auth: SpotifyOAuth | None = None
-        self._thread_local = threading.local()
-        self._worker_token: str | None = None
-        self._rate_limited = threading.Event()
 
     @property
     def auth(self) -> SpotifyOAuth:
@@ -65,19 +57,6 @@ class SpotifyDestination(PlaylistDestination):
             self._client = spotipy.Spotify(auth_manager=self.auth)
         return self._client
 
-    def _thread_client(self) -> spotipy.Spotify:
-        token = self._worker_token
-        client = getattr(self._thread_local, "client", None)
-        cached_token = getattr(self._thread_local, "token", None)
-        if client is None or cached_token != token:
-            if token:
-                client = spotipy.Spotify(auth=token)
-            else:
-                client = spotipy.Spotify(auth_manager=self.auth)
-            self._thread_local.client = client
-            self._thread_local.token = token
-        return client
-
     def is_authenticated(self) -> bool:
         if not has_spotify_config():
             return False
@@ -95,40 +74,8 @@ class SpotifyDestination(PlaylistDestination):
             raise SpotifyException(401, -1, "Spotify session expired. Connect again.")
         return token_info["access_token"]
 
-    def _spotify_search(self, query: str) -> list[dict]:
-        if not query or self._rate_limited.is_set():
-            return []
-        for attempt in range(3):
-            try:
-                result = self._thread_client().search(q=query, type="track", limit=10)
-                return result.get("tracks", {}).get("items", [])
-            except SpotifyException as exc:
-                if exc.http_status == 429:
-                    retry_after = 1.0
-                    if exc.headers:
-                        retry_after = float(exc.headers.get("Retry-After", retry_after))
-                    if retry_after > 10 or attempt >= 2:
-                        self._rate_limited.set()
-                        return []
-                    time.sleep(min(retry_after, 3.0))
-                    continue
-                raise
-        return []
-
-    def _make_resolver(self) -> TrackResolver:
-        return TrackResolver(
-            cache=self._track_cache,
-            search=self._spotify_search,
-            rate_limited=self._rate_limited,
-        )
-
     def resolve_tracks(self, tracks: list[Track]) -> tuple[list[str], list[Track]]:
-        try:
-            self._worker_token = self._access_token()
-        except SpotifyException:
-            self._worker_token = None
-        self._rate_limited.clear()
-        return self._make_resolver().resolve(tracks)
+        return resolve_tracks(self.client, tracks)
 
     def create_empty_playlist(self, name: str, description: str) -> tuple[str, str]:
         playlist = self.client.current_user_playlist_create(

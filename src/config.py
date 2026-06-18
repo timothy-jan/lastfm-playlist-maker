@@ -97,12 +97,11 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-# Performance tuning (override via .env)
 LASTFM_PAGE_SIZE = _int_env("LASTFM_PAGE_SIZE", 200)
-LASTFM_RESOLVE_WORKERS = _int_env("LASTFM_RESOLVE_WORKERS", 12)
-SPOTIFY_SEARCH_WORKERS = _int_env("SPOTIFY_SEARCH_WORKERS", 3)
-PLAYLIST_CHUNK_SIZE = _int_env("PLAYLIST_CHUNK_SIZE", 120)
-PLAYLIST_CHUNK_THRESHOLD = _int_env("PLAYLIST_CHUNK_THRESHOLD", 400)
+
+# Chunked playlist builds (Vercel timeout). ~50 tracks/chunk ≈ few seconds of search.
+PLAYLIST_CHUNK_SIZE = _int_env("PLAYLIST_CHUNK_SIZE", 50)
+PLAYLIST_CHUNK_THRESHOLD = _int_env("PLAYLIST_CHUNK_THRESHOLD", 200)
 
 
 def should_chunk_playlist(track_count: int) -> bool:
